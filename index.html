@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Visor AR de planta</title>
+<style>
+:root{
+  --bg:#0b1219; --panel:rgba(13,21,29,.86); --line:rgba(160,190,210,.18);
+  --txt:#e8f0f5; --dim:#8da2b2; --acc:#38d6c4; --amb:#ffb547; --ok:#34c38f; --bad:#ff6b6b;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none}
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:none;background:#000}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#ui{position:fixed;inset:0;pointer-events:none}
+#ui button,#ui input,#ui select,#ui label,.panel{pointer-events:auto}
+.panel{background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:14px}
+#top{position:absolute;left:max(10px,env(safe-area-inset-left));right:max(10px,env(safe-area-inset-right));top:max(10px,env(safe-area-inset-top));display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:flex;padding:3px;gap:3px}
+.seg button{border:0;background:transparent;color:var(--dim);padding:8px 12px;border-radius:10px;font:600 13px system-ui;min-height:38px}
+.seg button.on{background:var(--acc);color:#04201c}
+#chip{padding:8px 12px;font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center}
+#chip i{width:10px;height:10px;border-radius:50%;background:var(--dim);display:inline-block}
+#chip.ok i{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+#chip.warn i{background:var(--amb)}
+#bar{position:absolute;left:50%;transform:translateX(-50%);bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:4px;padding:5px}
+#bar button{border:0;background:transparent;color:var(--txt);min-width:62px;min-height:52px;border-radius:10px;font:600 11px system-ui;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+#bar button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#bar button.on{background:rgba(56,214,196,.18);color:var(--acc)}
+#hint{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:14px 18px;text-align:center;max-width:min(86vw,360px);display:none}
+#hint b{color:var(--acc)}
+#reticleBox{position:absolute;left:50%;top:50%;width:min(56vw,260px);aspect-ratio:1;transform:translate(-50%,-50%);display:none;pointer-events:none;border-radius:18px;
+  background:
+   linear-gradient(var(--acc),var(--acc)) top left/34px 3px no-repeat,linear-gradient(var(--acc),var(--acc)) top left/3px 34px no-repeat,
+   linear-gradient(var(--acc),var(--acc)) top right/34px 3px no-repeat,linear-gradient(var(--acc),var(--acc)) top right/3px 34px no-repeat,
+   linear-gradient(var(--acc),var(--acc)) bottom left/34px 3px no-repeat,linear-gradient(var(--acc),var(--acc)) bottom left/3px 34px no-repeat,
+   linear-gradient(var(--acc),var(--acc)) bottom right/34px 3px no-repeat,linear-gradient(var(--acc),var(--acc)) bottom right/3px 34px no-repeat}
+#drawer{position:absolute;top:0;right:0;bottom:0;width:min(88vw,360px);transform:translateX(105%);transition:transform .22s;border-radius:0;border-width:0 0 0 1px;display:flex;flex-direction:column;padding-top:max(10px,env(safe-area-inset-top))}
+#drawer.open{transform:none}
+#drawer header{padding:6px 12px 8px;display:flex;flex-direction:column;gap:8px}
+#drawer h2,#sheet h2{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+.x{border:0;background:transparent;color:var(--dim);font-size:22px;min-width:40px;min-height:40px}
+#q{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--txt);font-size:15px}
+.row2{display:flex;gap:6px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--txt);padding:8px 11px;border-radius:9px;font:600 12px system-ui;min-height:36px}
+.btn.on{background:var(--acc);color:#04201c;border-color:transparent}
+#list{flex:1;overflow:auto;padding:0 6px 90px;-webkit-overflow-scrolling:touch}
+.p{display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:9px}
+.p.sel{background:rgba(255,181,71,.16)}
+.p .eye,.p .st{border:0;background:transparent;min-width:42px;min-height:42px;color:var(--txt);font-size:16px;border-radius:9px}
+.p .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:10px 2px;font-size:13px}
+.p.off .nm{opacity:.4;text-decoration:line-through}
+.p .st i{display:block;width:16px;height:16px;border-radius:50%;margin:auto;border:2px solid rgba(255,255,255,.35)}
+.s0 i{background:#7f8c99}.s1 i{background:var(--amb)}.s2 i{background:var(--ok)}
+#info{position:absolute;left:max(10px,env(safe-area-inset-left));right:max(10px,env(safe-area-inset-right));bottom:calc(max(12px,env(safe-area-inset-bottom)) + 70px);padding:10px 12px;display:none;max-width:460px;margin:0 auto}
+#info .t{font-weight:700;font-size:14px;display:flex;justify-content:space-between;gap:8px}
+#info .d{color:var(--dim);font-size:12px;margin:2px 0 8px}
+#prog{position:absolute;left:max(10px,env(safe-area-inset-left));top:calc(max(10px,env(safe-area-inset-top)) + 58px);padding:8px 12px;display:none;font-size:12px;min-width:190px}
+#prog .bar{height:8px;border-radius:5px;background:rgba(255,255,255,.12);overflow:hidden;margin:6px 0;display:flex}
+#prog .bar span{display:block;height:100%}
+#sheet{position:absolute;left:0;right:0;bottom:0;max-height:78vh;overflow:auto;transform:translateY(105%);transition:transform .22s;border-radius:18px 18px 0 0;padding:8px 14px calc(18px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto}
+#sheet.open{transform:none}
+#sheet fieldset{border:1px solid var(--line);border-radius:12px;margin:10px 0;padding:8px 10px}
+#sheet legend{color:var(--acc);font-weight:700;font-size:12px;padding:0 6px}
+.f{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:7px 0;font-size:13px}
+.f input[type=number],.f select{width:112px;padding:8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--txt);font-size:14px}
+.f input[type=range]{width:150px}
+.f small{color:var(--dim);display:block;font-size:11px}
+#mlabel{position:absolute;display:none;transform:translate(-50%,-130%);background:#04201c;color:var(--acc);border:1px solid var(--acc);padding:4px 8px;border-radius:8px;font:700 12px system-ui;white-space:nowrap;pointer-events:none}
+#toast{position:absolute;left:50%;top:max(60px,calc(env(safe-area-inset-top) + 60px));transform:translateX(-50%);padding:9px 14px;display:none;font-size:13px;max-width:86vw;text-align:center}
+#xrbar{position:absolute;left:50%;transform:translateX(-50%);bottom:max(12px,env(safe-area-inset-bottom));display:none;gap:6px;padding:8px}
+a{color:var(--acc)}
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+
+<div id="ui">
+  <div id="top">
+    <div class="panel seg" id="modes">
+      <button data-m="cam" class="on">Cámara + QR</button>
+      <button data-m="xr" id="btnXR">AR en piso</button>
+      <button data-m="3d">Vista 3D</button>
+    </div>
+    <div class="panel" id="chip"><i></i><span id="chipTxt">Listo</span></div>
+  </div>
+
+  <div id="prog" class="panel"></div>
+  <div id="reticleBox"></div>
+  <div id="hint" class="panel"></div>
+  <div id="mlabel"></div>
+  <div id="toast" class="panel"></div>
+
+  <div id="info" class="panel">
+    <div class="t"><span id="iName">—</span><button class="x" id="iClose" style="min-height:24px;min-width:30px;font-size:18px">✕</button></div>
+    <div class="d" id="iDim"></div>
+    <div class="row2">
+      <button class="btn" data-st="0">Pendiente</button>
+      <button class="btn" data-st="1">En proceso</button>
+      <button class="btn" data-st="2">Terminado</button>
+      <button class="btn" id="iHide">Ocultar</button>
+      <button class="btn" id="iIso">Aislar</button>
+    </div>
+  </div>
+
+  <div id="bar" class="panel">
+    <button id="bParts"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Piezas</button>
+    <button id="bMeasure"><svg viewBox="0 0 24 24"><path d="M3 17 17 3l4 4L7 21z"/><path d="m8 12 2 2M11 9l2 2M14 6l2 2"/></svg>Cotas</button>
+    <button id="bProg"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Avance</button>
+    <button id="bSet"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Ajustes</button>
+    <button id="bLoad"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M4 17v4h16v-4"/></svg>Cargar</button>
+  </div>
+
+  <div id="xrbar" class="panel">
+    <button class="btn" id="xL">⟲ 15°</button>
+    <button class="btn" id="xR">⟳ 15°</button>
+    <button class="btn" id="xM">Escala −</button>
+    <button class="btn" id="xP">Escala +</button>
+    <button class="btn" id="xParts">Piezas</button>
+    <button class="btn" id="xEnd">Salir</button>
+  </div>
+
+  <aside id="drawer" class="panel">
+    <header>
+      <h2><span id="dTitle">Piezas</span><button class="x" id="dClose">✕</button></h2>
+      <input id="q" type="search" placeholder="Buscar pieza…" autocomplete="off">
+      <div class="row2">
+        <button class="btn" id="aShow">Mostrar todo</button>
+        <button class="btn" id="aHide">Ocultar lista</button>
+        <button class="btn" id="aIso">Solo lista</button>
+      </div>
+      <div class="row2" id="bulkRow">
+        <span style="color:var(--dim);font-size:12px;align-self:center">Marcar la lista:</span>
+        <button class="btn" data-bulk="0">Pend.</button>
+        <button class="btn" data-bulk="1">Proceso</button>
+        <button class="btn" data-bulk="2">Listo</button>
+      </div>
+    </header>
+    <div id="list"></div>
+  </aside>
+
+  <section id="sheet" class="panel">
+    <h2><span>Ajustes</span><button class="x" id="sClose">✕</button></h2>
+    <fieldset><legend>Código QR en la pared</legend>
+      <div class="f"><span>Tamaño del QR (cm)<small>Lado de la parte negra, sin margen blanco</small></span><input type="number" id="qrSize" step="0.5" min="3"></div>
+      <div class="f"><span>Texto del QR<small>Vacío = cualquier QR</small></span><input type="text" id="qrText" style="width:112px;padding:8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--txt)"></div>
+      <div class="f"><span>Altura del QR sobre el piso (m)</span><input type="number" id="qrH" step="0.05" min="0"></div>
+      <div class="f"><span>Ángulo de la lente (°)<small>Si el modelo “flota” o cambia de tamaño al acercarte, ajusta aquí</small></span><input type="range" id="fov" min="45" max="95" step="1"></div>
+      <div class="f"><span>Mantener con giroscopio<small>Sigue girando si el QR sale de cuadro</small></span><input type="checkbox" id="gyro"></div>
+    </fieldset>
+    <fieldset><legend>Colocación del modelo</legend>
+      <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="file">Origen del archivo</option></select></div>
+      <div class="f"><span>Separación de la pared (m)</span><input type="number" id="oz" step="0.05"></div>
+      <div class="f"><span>Desplazar a la derecha (m)</span><input type="number" id="ox" step="0.05"></div>
+      <div class="f"><span>Giro (°)</span><input type="number" id="yaw" step="5"></div>
+      <div class="f"><span>Unidad del archivo</span><select id="unit"><option value="0.001">mm</option><option value="0.01">cm</option><option value="1">m</option><option value="0.0254">pulgadas</option></select></div>
+      <div class="f"><span>Eje Z hacia arriba</span><input type="checkbox" id="zup"></div>
+      <div class="f"><span>Opacidad del modelo</span><input type="range" id="opa" min="15" max="100" step="5"></div>
+    </fieldset>
+    <fieldset><legend>Avance de obra</legend>
+      <div class="row2">
+        <button class="btn" id="pExpJ">Guardar avance (JSON)</button>
+        <button class="btn" id="pExpC">Exportar CSV</button>
+        <button class="btn" id="pImp">Abrir avance…</button>
+        <button class="btn" id="pReset">Reiniciar avance</button>
+      </div>
+    </fieldset>
+    <fieldset><legend>Vista 3D</legend>
+      <div class="f"><span>Mostrar pared, QR y piso</span><input type="checkbox" id="helpers"></div>
+    </fieldset>
+  </section>
+</div>
+
+<input type="file" id="file" accept=".stl,.obj,.glb,.gltf" multiple hidden>
+<input type="file" id="fileProg" accept=".json" hidden>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => Math.min(b,Math.max(a,v));
+
+/* ---------- ajustes guardados ---------- */
+const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
+let S = {...DEF};
+try { Object.assign(S, JSON.parse(localStorage.getItem('ar_ajustes') || '{}')); } catch(e){}
+const saveS = () => { try { localStorage.setItem('ar_ajustes', JSON.stringify(S)); } catch(e){} };
+
+/* ---------- escena ---------- */
+const canvas = $('gl'), video = $('cam');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true, powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(2,4,3); scene.add(sun);
+const sun2 = new THREE.DirectionalLight(0xbfd8ff, .7); sun2.position.set(-3,2,-2); scene.add(sun2);
+
+const camAR = new THREE.PerspectiveCamera(60, 1, 0.02, 80);
+const cam3d = new THREE.PerspectiveCamera(50, 1, 0.02, 200);
+cam3d.position.set(2.6, 0.4, 3.4);
+let activeCam = camAR;
+const orbit = new OrbitControls(cam3d, canvas);
+orbit.target.set(0, -0.8, 0.6); orbit.enableDamping = true; orbit.enabled = false;
+
+const anchor = new THREE.Group();      // = el QR (x derecha, y arriba, z hacia ti)
+const holder = new THREE.Group();      // colocación del modelo respecto al QR
+const pivot = new THREE.Group();       // escala y eje arriba
+anchor.add(holder); holder.add(pivot); scene.add(anchor);
+
+const helpers = new THREE.Group(); anchor.add(helpers);
+(function(){
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(4, 2.6), new THREE.MeshBasicMaterial({color:0x2a3a48, transparent:true, opacity:.35, side:THREE.DoubleSide}));
+  wall.position.set(0, 0.5, -0.003); wall.userData.helper = true; helpers.add(wall);
+  helpers.userData.wall = wall;
+  helpers.userData.qr = new THREE.Mesh(new THREE.PlaneGeometry(1,1), new THREE.MeshBasicMaterial({color:0xffffff, side:THREE.DoubleSide}));
+  helpers.add(helpers.userData.qr);
+  helpers.userData.grid = new THREE.GridHelper(6, 24, 0x38d6c4, 0x36495a);
+  helpers.add(helpers.userData.grid);
+})();
+
+/* ---------- modelo ---------- */
+let parts = [];            // {mesh, name, state, dim:[x,y,z] m, vol}
+let modelKey = 'demo', unitOverride = null;
+let modelBox = new THREE.Box3(new THREE.Vector3(), new THREE.Vector3());
+let selected = -1;
+let hashColor = s => { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) >>> 0; return new THREE.Color().setHSL(0.55 + (h%40)/400, 0.12 + (h%7)/60, 0.55 + (h%5)/30); };
+
+function clearModel(){
+  while (pivot.children.length) {
+    const o = pivot.children.pop();
+    o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose?.(); });
+  }
+  parts = []; selected = -1; clearMeasure();
+}
+
+function registerModel(root, key){
+  clearModel();
+  modelKey = key;
+  pivot.add(root);
+  root.updateMatrixWorld(true);
+  const list = [];
+  root.traverse(o => { if (o.isMesh) list.push(o); });
+  list.forEach((m, i) => {
+    const base = (m.material && m.material.color) ? m.material.color.clone() : hashColor(m.name || ('p'+i));
+    if (!m.geometry.attributes.normal) m.geometry.computeVertexNormals();
+    m.material = new THREE.MeshStandardMaterial({color:base, metalness:.25, roughness:.6, side:THREE.DoubleSide});
+    m.userData.base = base.clone();
+    let name = m.name;
+    if (!name && m.parent && m.parent !== root) name = m.parent.name;
+    parts.push({mesh:m, name: name || ('Pieza ' + (i+1)), state:0});
+    m.userData.idx = i;
+  });
+  loadProgress();
+  applyUnits();
+  buildList();
+  refreshMaterials();
+  updateProgress();
+}
+
+function applyUnits(){
+  const u = unitOverride != null ? unitOverride : (parseFloat(S.unit) || 1);
+  pivot.scale.setScalar(u);
+  pivot.rotation.set(S.zup ? -Math.PI/2 : 0, 0, 0);
+  pivot.updateMatrixWorld(true);
+  holder.position.set(0,0,0); holder.rotation.set(0,0,0); holder.updateMatrixWorld(true);
+  modelBox.setFromObject(pivot);
+  parts.forEach(p => {
+    const b = new THREE.Box3().setFromObject(p.mesh), s = b.getSize(new THREE.Vector3());
+    p.dim = [s.x, s.y, s.z]; p.vol = s.x*s.y*s.z;
+  });
+  applyPlacement();
+  helpers.userData.qr.scale.setScalar(S.qrSize/100);
+}
+
+function applyPlacement(){
+  const yaw = S.yaw * Math.PI/180;
+  holder.rotation.set(0, yaw, 0);
+  let c = new THREE.Vector3(), T = new THREE.Vector3(S.ox, 0, S.oz);
+  if (S.origin === 'base') {
+    c.set((modelBox.min.x+modelBox.max.x)/2, modelBox.min.y, (modelBox.min.z+modelBox.max.z)/2);
+    T.y = -S.qrH;
+  }
+  holder.position.copy(T).sub(c.applyAxisAngle(new THREE.Vector3(0,1,0), yaw));
+  helpers.userData.grid.position.y = -S.qrH;
+  helpers.userData.wall.position.y = 1.3 - S.qrH;
+  holder.updateMatrixWorld(true);
+  updateMeasureVisual();
+}
+
+/* ---------- modelo de demostración (genérico, no es la ECS-700) ---------- */
+function buildDemo(){
+  const root = new THREE.Group();
+  const add = (name, geo, x, y, z, rot) => { const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial()); m.name = name; m.position.set(x,y,z); if (rot) m.rotation.set(...rot); root.add(m); return m; };
+  const box = (w,h,d) => new THREE.BoxGeometry(w,h,d);
+  const cyl = (r,h,s=28) => new THREE.CylinderGeometry(r,r,h,s);
+  add('Bastidor - base', box(1.5,.08,.8), 0,.04,0);
+  [[-.7,-.35],[.7,-.35],[-.7,.35],[.7,.35]].forEach((p,i)=> add('Bastidor - columna '+(i+1), box(.06,1.2,.06), p[0], .68, p[1]));
+  add('Bastidor - travesaño sup. A', box(1.46,.06,.06), 0,1.28,-.35);
+  add('Bastidor - travesaño sup. B', box(1.46,.06,.06), 0,1.28,.35);
+  add('Tanque principal', cyl(.32,.9), -.35,.62,0);
+  add('Tapa del tanque', new THREE.SphereGeometry(.32,28,10,0,Math.PI*2,0,Math.PI/2), -.35,1.07,0);
+  add('Motor eléctrico', cyl(.12,.38), .45,.27,0, [0,0,Math.PI/2]);
+  add('Bomba', box(.3,.26,.26), .12,.21,0);
+  add('Panel de control', box(.5,.6,.16), .55,.95,-.2);
+  add('Tubería entrada', cyl(.035,1.0), -.7,.9,-.2, [0,0,0]);
+  add('Tubería salida', cyl(.035,.9), .0,.45,.3, [0,0,Math.PI/2]);
+  add('Válvula 1', new THREE.SphereGeometry(.07,16,12), -.7,.4,-.2);
+  add('Válvula 2', new THREE.SphereGeometry(.07,16,12), .45,.45,.3);
+  return root;
+}
+
+/* ---------- carga de archivos ---------- */
+async function loadFiles(files){
+  files = [...files]; if (!files.length) return;
+  toast('Cargando ' + files.length + ' archivo(s)…', 60000);
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const root = new THREE.Group();
+    let key = files.map(f => f.name + f.size).join('|');
+    for (const f of files) {
+      const ext = f.name.split('.').pop().toLowerCase();
+      const buf = await f.arrayBuffer();
+      const nm = f.name.replace(/\.[^.]+$/, '');
+      if (ext === 'stl') {
+        const g = new STLLoader().parse(buf);
+        const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial()); m.name = nm; root.add(m);
+      } else if (ext === 'obj') {
+        root.add(new OBJLoader().parse(new TextDecoder().decode(buf)));
+      } else if (ext === 'glb' || ext === 'gltf') {
+        const g = await new GLTFLoader().parseAsync(buf, '');
+        root.add(g.scene);
+        S.unit = '1'; S.zup = false; $('unit').value = '1'; $('zup').checked = false;
+      } else throw new Error('Formato no admitido: ' + f.name);
+    }
+    unitOverride = null;
+    registerModel(root, key.length > 200 ? key.slice(0,200) : key);
+    saveS();
+    toast('Modelo cargado: ' + parts.length + ' piezas');
+    $('hint').style.display = 'none'; updateHint();
+  } catch(e) { console.error(e); toast('No se pudo leer: ' + e.message, 6000); }
+}
+
+/* ---------- materiales, selección y avance ---------- */
+const PROG_COL = [new THREE.Color(0x7f8c99), new THREE.Color(0xffb547), new THREE.Color(0x34c38f)];
+let showProg = false;
+function refreshMaterials(){
+  const op = S.opa/100;
+  parts.forEach((p, i) => {
+    const m = p.mesh.material;
+    m.color.copy(showProg ? PROG_COL[p.state] : p.mesh.userData.base);
+    m.emissive.setHex(i === selected ? 0xff8a00 : 0x000000);
+    m.emissiveIntensity = i === selected ? 0.55 : 0;
+    m.transparent = op < 1; m.opacity = op; m.depthWrite = op >= .6;
+  });
+}
+function select(i, scroll){
+  selected = i;
+  refreshMaterials();
+  document.querySelectorAll('#list .p.sel').forEach(e => e.classList.remove('sel'));
+  if (i >= 0) {
+    const p = parts[i], el = document.querySelector('#list .p[data-i="'+i+'"]');
+    if (el) { el.classList.add('sel'); if (scroll) el.scrollIntoView({block:'center'}); }
+    $('iName').textContent = p.name;
+    const d = p.dim.map(v => Math.round(v*1000));
+    $('iDim').textContent = 'Caja envolvente: ' + d.join(' × ') + ' mm';
+    $('info').style.display = 'block';
+    $('iHide').textContent = p.mesh.visible ? 'Ocultar' : 'Mostrar';
+    document.querySelectorAll('#info [data-st]').forEach(b => b.classList.toggle('on', +b.dataset.st === p.state));
+  } else $('info').style.display = 'none';
+}
+function setState(i, st){
+  parts[i].state = st; saveProgress();
+  const el = document.querySelector('#list .p[data-i="'+i+'"] .st'); if (el) el.className = 'st s' + st;
+  refreshMaterials(); updateProgress();
+  if (i === selected) document.querySelectorAll('#info [data-st]').forEach(b => b.classList.toggle('on', +b.dataset.st === st));
+}
+const progKey = () => 'ar_avance:' + modelKey + ':' + parts.length;
+function saveProgress(){ try { localStorage.setItem(progKey(), JSON.stringify(parts.map(p => p.state))); } catch(e){} }
+function loadProgress(){
+  try { const a = JSON.parse(localStorage.getItem(progKey()) || 'null'); if (a && a.length === parts.length) parts.forEach((p,i) => p.state = a[i] | 0); } catch(e){}
+}
+function stats(){
+  const n = parts.length || 1, c = [0,0,0], v = [0,0,0]; let vt = 0;
+  parts.forEach(p => { c[p.state]++; v[p.state] += p.vol; vt += p.vol; });
+  return {n, c, v, vt: vt || 1};
+}
+function updateProgress(){
+  const el = $('prog'); if (!showProg) { el.style.display = 'none'; return; }
+  const s = stats(), pc = x => Math.round(100*x);
+  const done = pc(s.c[2]/s.n), proc = pc(s.c[1]/s.n);
+  el.style.display = 'block';
+  el.innerHTML = '<b>Avance: ' + done + ' % terminado</b>' +
+    '<div class="bar"><span style="width:'+(100*s.c[2]/s.n)+'%;background:var(--ok)"></span><span style="width:'+(100*s.c[1]/s.n)+'%;background:var(--amb)"></span></div>' +
+    s.c[2] + ' listas · ' + s.c[1] + ' en proceso · ' + s.c[0] + ' pendientes<br><span style="color:var(--dim)">Por volumen aprox.: ' + pc(s.v[2]/s.vt) + ' %</span>';
+}
+
+/* ---------- lista de piezas ---------- */
+function buildList(){
+  const q = $('q').value.trim().toLowerCase(), box = $('list'); let html = '';
+  parts.forEach((p, i) => {
+    if (q && !p.name.toLowerCase().includes(q)) return;
+    html += '<div class="p'+(p.mesh.visible?'':' off')+(i===selected?' sel':'')+'" data-i="'+i+'"><button class="eye">'+(p.mesh.visible?'👁':'⊘')+'</button><div class="nm">'+esc(p.name)+'</div><button class="st s'+p.state+'" title="Cambiar estado"><i></i></button></div>';
+  });
+  box.innerHTML = html || '<p style="color:var(--dim);padding:14px">Sin resultados.</p>';
+  $('dTitle').textContent = 'Piezas (' + parts.length + ')';
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const visibleRows = () => [...document.querySelectorAll('#list .p')].map(e => +e.dataset.i);
+function setVis(i, v){ parts[i].mesh.visible = v; const el = document.querySelector('#list .p[data-i="'+i+'"]'); if (el) { el.classList.toggle('off', !v); el.querySelector('.eye').textContent = v ? '👁' : '⊘'; } }
+$('list').addEventListener('click', e => {
+  const row = e.target.closest('.p'); if (!row) return; const i = +row.dataset.i;
+  if (e.target.closest('.eye')) { setVis(i, !parts[i].mesh.visible); if (i === selected) select(i); }
+  else if (e.target.closest('.st')) setState(i, (parts[i].state + 1) % 3);
+  else select(i);
+});
+$('q').addEventListener('input', buildList);
+$('aShow').onclick = () => { parts.forEach((_, i) => setVis(i, true)); };
+$('aHide').onclick = () => visibleRows().forEach(i => setVis(i, false));
+$('aIso').onclick = () => { const v = new Set(visibleRows()); parts.forEach((_, i) => setVis(i, v.has(i))); };
+document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => visibleRows().forEach(i => setState(i, +b.dataset.bulk)));
+document.querySelectorAll('#info [data-st]').forEach(b => b.onclick = () => selected >= 0 && setState(selected, +b.dataset.st));
+$('iHide').onclick = () => { if (selected < 0) return; setVis(selected, !parts[selected].mesh.visible); select(selected); };
+$('iIso').onclick = () => { if (selected < 0) return; parts.forEach((_, i) => setVis(i, i === selected)); };
+$('iClose').onclick = () => select(-1);
+
+/* ---------- cotas ---------- */
+let measuring = false, mPts = [];
+const mGroup = new THREE.Group(); holder.add(mGroup);
+const mLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0x38d6c4, depthTest:false}));
+mLine.renderOrder = 10; mGroup.add(mLine);
+function clearMeasure(){ mPts = []; while (mGroup.children.length > 1) mGroup.remove(mGroup.children[1]); mLine.visible = false; $('mlabel').style.display = 'none'; }
+function addPoint(world){
+  if (mPts.length >= 2) clearMeasure();
+  const local = holder.worldToLocal(world.clone());
+  mPts.push(local);
+  const s = new THREE.Mesh(new THREE.SphereGeometry(.012, 12, 8), new THREE.MeshBasicMaterial({color:0xffb547, depthTest:false}));
+  s.renderOrder = 11; s.position.copy(local); mGroup.add(s);
+  updateMeasureVisual();
+}
+function fmt(m){ return m >= 1 ? m.toFixed(3) + ' m' : Math.round(m*1000) + ' mm'; }
+function updateMeasureVisual(){
+  if (mPts.length === 2) {
+    mLine.geometry.setFromPoints(mPts); mLine.visible = true;
+    const d = mPts[0].distanceTo(mPts[1]), dv = mPts[1].clone().sub(mPts[0]);
+    $('mlabel').dataset.txt = fmt(d) + '  (ΔX ' + Math.round(Math.abs(dv.x)*1000) + ' · ΔY ' + Math.round(Math.abs(dv.y)*1000) + ' · ΔZ ' + Math.round(Math.abs(dv.z)*1000) + ' mm)';
+  } else { mLine.visible = false; $('mlabel').style.display = 'none'; }
+}
+const _v = new THREE.Vector3();
+function placeLabel(){
+  const el = $('mlabel');
+  if (mPts.length < 2) return;
+  _v.copy(mPts[0]).add(mPts[1]).multiplyScalar(.5); holder.localToWorld(_v); _v.project(activeCam);
+  if (_v.z > 1 || _v.z < -1) { el.style.display = 'none'; return; }
+  el.textContent = el.dataset.txt; el.style.display = 'block';
+  el.style.left = ((_v.x + 1)/2*innerWidth) + 'px'; el.style.top = ((1 - _v.y)/2*innerHeight) + 'px';
+}
+
+/* ---------- toques sobre el modelo ---------- */
+const ray = new THREE.Raycaster();
+function pick(ev){
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((ev.clientX - r.left)/r.width)*2 - 1, -((ev.clientY - r.top)/r.height)*2 + 1), activeCam);
+  const hit = ray.intersectObjects(parts.filter(p => p.mesh.visible).map(p => p.mesh), false)[0];
+  if (!hit) { if (!measuring) select(-1); return; }
+  if (measuring) { addPoint(hit.point); }
+  else select(hit.object.userData.idx, true);
+}
+let down = null;
+canvas.addEventListener('pointerdown', e => { down = {x:e.clientX, y:e.clientY, t:performance.now()}; });
+canvas.addEventListener('pointerup', e => {
+  if (!down) return; const d = Math.hypot(e.clientX - down.x, e.clientY - down.y), dt = performance.now() - down.t; down = null;
+  if (d < 9 && dt < 600 && mode !== 'xr') pick(e);
+});
+function toggleMeasure(on){ measuring = on; $('bMeasure').classList.toggle('on', on); if (!on) clearMeasure(); else toast('Toca dos puntos del modelo para medir'); }
+$('bMeasure').onclick = () => toggleMeasure(!measuring);
+
+/* ---------- QR: homografía y pose ---------- */
+function solveH(src, dst){
+  const A = [];
+  for (let i = 0; i < 4; i++) {
+    const [x,y] = src[i], [u,v] = dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y,u]); A.push([0,0,0,x,y,1,-v*x,-v*y,v]);
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c; for (let r = c+1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    if (Math.abs(A[p][c]) < 1e-12) return null;
+    [A[c], A[p]] = [A[p], A[c]];
+    for (let r = 0; r < 8; r++) if (r !== c) { const k = A[r][c]/A[c][c]; for (let j = c; j < 9; j++) A[r][j] -= k*A[c][j]; }
+  }
+  const h = A.map((row, i) => row[8]/row[i]);
+  return [[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]];
+}
+const nrm = a => Math.hypot(a[0],a[1],a[2]);
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function poseFromCorners(px, size, f, cx, cy){
+  const h = size/2, obj = [[-h,h],[h,h],[h,-h],[-h,-h]];      // y hacia arriba
+  const H = solveH(obj, px); if (!H) return null;
+  const m = [0,1,2].map(c => [(H[0][c] - cx*H[2][c])/f, (H[1][c] - cy*H[2][c])/f, H[2][c]]);
+  let lam = 2/(nrm(m[0]) + nrm(m[1]));
+  if (lam*m[2][2] < 0) lam = -lam;
+  let r1 = m[0].map(v => v*lam), r2 = m[1].map(v => v*lam);
+  const n1 = nrm(r1); r1 = r1.map(v => v/n1);
+  const d = r1[0]*r2[0] + r1[1]*r2[1] + r1[2]*r2[2]; r2 = r2.map((v,i) => v - d*r1[i]);
+  const n2 = nrm(r2); r2 = r2.map(v => v/n2);
+  const r3 = cross(r1, r2), t = m[2].map(v => v*lam);
+  // OpenCV (y abajo, z adelante) -> three (y arriba, z atrás)
+  const M = new THREE.Matrix4().set(
+    r1[0], r2[0], r3[0], t[0],
+   -r1[1],-r2[1],-r3[1],-t[1],
+   -r1[2],-r2[2],-r3[2],-t[2],
+    0,0,0,1);
+  return M;
+}
+window.__ar = {solveH, poseFromCorners, anchor, S};
+
+/* ---------- cámara, detección y giroscopio ---------- */
+let mode = '3d', stream = null, lastSeen = -1e9, qrSeen = false, scanTimer = 0;
+const tgtPos = new THREE.Vector3(), tgtQuat = new THREE.Quaternion();
+const pos0 = new THREE.Vector3(), quat0 = new THREE.Quaternion(); let qDev0 = null;
+const qDev = new THREE.Quaternion(); let haveGyro = false;
+const scan = document.createElement('canvas'), sctx = scan.getContext('2d', {willReadFrequently:true});
+
+function focalPx(){ const vw = video.videoWidth || 1280, vh = video.videoHeight || 720; return (Math.max(vw, vh)/2)/Math.tan(S.fov*Math.PI/360); }
+function fitCam(){
+  const cw = innerWidth, ch = innerHeight;
+  renderer.setSize(cw, ch, false);
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720, s = Math.max(cw/vw, ch/vh);
+  camAR.aspect = cw/ch; camAR.fov = 2*Math.atan((ch/s/2)/focalPx())*180/Math.PI; camAR.updateProjectionMatrix();
+  cam3d.aspect = cw/ch; cam3d.updateProjectionMatrix();
+}
+addEventListener('resize', fitCam);
+
+function onOrient(e){
+  if (e.alpha == null) return;
+  const z = new THREE.Vector3(0,0,1), eu = new THREE.Euler(), q1 = new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5));
+  eu.set(e.beta*Math.PI/180, e.alpha*Math.PI/180, -e.gamma*Math.PI/180, 'YXZ');
+  qDev.setFromEuler(eu).multiply(q1);
+  const ang = ((screen.orientation && screen.orientation.angle) || 0)*Math.PI/180;
+  qDev.multiply(new THREE.Quaternion().setFromAxisAngle(z, -ang));
+  haveGyro = true;
+}
+async function startGyro(){
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission();
+    addEventListener('deviceorientation', onOrient);
+  } catch(e){}
+}
+
+async function startCamera(){
+  if (stream) return true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    video.srcObject = stream; await video.play().catch(()=>{});
+    await new Promise(r => { if (video.videoWidth) r(); else video.onloadedmetadata = r; });
+    return true;
+  } catch(e) {
+    setChip('warn', 'Sin cámara'); toast('No se pudo abrir la cámara: ' + (e.message || e) + '. Se necesita HTTPS y permiso de cámara.', 7000);
+    stream = null; return false;
+  }
+}
+function stopCamera(){ if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; clearInterval(scanTimer); }
+
+function scanFrame(){
+  if (mode !== 'cam' || !video.videoWidth) return;
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 800/Math.max(vw, vh));
+  scan.width = Math.round(vw*k); scan.height = Math.round(vh*k);
+  sctx.drawImage(video, 0, 0, scan.width, scan.height);
+  const img = sctx.getImageData(0, 0, scan.width, scan.height);
+  const r = window.jsQR && jsQR(img.data, scan.width, scan.height, {inversionAttempts:'dontInvert'});
+  const now = performance.now();
+  if (r && (!S.qrText || r.data.includes(S.qrText))) {
+    const L = r.location, px = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map(p => [p.x/k, p.y/k]);
+    const M = poseFromCorners(px, S.qrSize/100, focalPx(), vw/2, vh/2);
+    if (M) {
+      M.decompose(pos0, quat0, new THREE.Vector3());
+      qDev0 = haveGyro ? qDev.clone() : null;
+      if (!qrSeen || now - lastSeen > 2500) { anchor.position.copy(pos0); anchor.quaternion.copy(quat0); }
+      lastSeen = now; qrSeen = true; window.__ar.lastQR = r.data;
+    }
+  }
+}
+function updateHint(){
+  const h = $('hint'), b = $('reticleBox');
+  if (mode === 'cam') {
+    const tracking = performance.now() - lastSeen < 700;
+    b.style.display = qrSeen ? 'none' : 'block';
+    if (!qrSeen) { h.style.display = 'block'; h.innerHTML = 'Apunta la cámara al <b>código QR</b> pegado en la pared.<br><span style="color:var(--dim)">Mantén el QR completo y derecho en cuadro.</span>'; }
+    else h.style.display = 'none';
+    if (!parts.length) { h.style.display = 'block'; h.innerHTML = 'Carga un modelo con <b>Cargar</b>.'; }
+    setChip(tracking ? 'ok' : (qrSeen ? 'warn' : ''), tracking ? 'QR detectado' : (qrSeen ? (S.gyro && haveGyro ? 'QR fuera de cuadro · giroscopio' : 'QR perdido') : 'Buscando QR…'));
+  } else { h.style.display = 'none'; b.style.display = 'none'; }
+}
+function setChip(cls, txt){ const c = $('chip'); c.className = 'panel ' + cls; $('chipTxt').textContent = txt; }
+
+/* ---------- modos ---------- */
+async function setMode(m){
+  if (m === mode && m !== 'xr') return;
+  if (mode === 'xr' && m !== 'xr') await endXR();
+  mode = m;
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  if (m === 'cam') {
+    renderer.setClearColor(0x000000, 0); scene.background = null;
+    helpers.visible = false; orbit.enabled = false; activeCam = camAR;
+    anchor.scale.setScalar(1); anchor.visible = false; qrSeen = false; lastSeen = -1e9;
+    $('hint').style.display = 'block';
+    const ok = await startCamera(); if (!ok) { mode = '3d'; await setMode('3d'); return; }
+    video.style.display = 'block'; fitCam();
+    if (S.gyro) startGyro();
+    clearInterval(scanTimer); scanTimer = setInterval(scanFrame, 90);
+  } else if (m === '3d') {
+    stopCamera(); video.style.display = 'none';
+    renderer.setClearColor(0x0b1219, 1); scene.background = new THREE.Color(0x0b1219);
+    anchor.position.set(0,0,0); anchor.quaternion.identity(); anchor.scale.setScalar(1); anchor.visible = true;
+    helpers.visible = S.helpers; orbit.enabled = true; activeCam = cam3d; fitCam();
+    setChip('', 'Vista 3D');
+  }
+  updateHint();
+}
+document.querySelectorAll('#modes button').forEach(b => b.onclick = () => b.dataset.m === 'xr' ? startXR() : setMode(b.dataset.m));
+
+/* ---------- AR nativo en el piso (WebXR, Android/Chrome) ---------- */
+let xrSession = null, hitSource = null, reticle = null, placedXR = false, xrYaw = 0;
+const btnXR = $('btnXR');
+btnXR.style.display = 'none';
+if (navigator.xr && navigator.xr.isSessionSupported) navigator.xr.isSessionSupported('immersive-ar').then(ok => { if (ok) btnXR.style.display = ''; }).catch(()=>{});
+else btnXR.style.display = 'none';
+async function startXR(){
+  if (!navigator.xr) { toast('Este navegador no tiene AR nativo. Usa Chrome en un Android con ARCore.', 5000); return; }
+  try {
+    stopCamera(); video.style.display = 'none';
+    xrSession = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:$('ui')}});
+  } catch(e) { toast('No se pudo iniciar AR: ' + (e.message || e), 6000); xrSession = null; return setMode('cam'); }
+  mode = 'xr';
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m === 'xr'));
+  renderer.xr.enabled = true; renderer.setClearColor(0, 0); scene.background = null; helpers.visible = false; orbit.enabled = false;
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(xrSession);
+  const vs = await xrSession.requestReferenceSpace('viewer'); hitSource = await xrSession.requestHitTestSource({space:vs});
+  if (!reticle) { reticle = new THREE.Mesh(new THREE.RingGeometry(.12,.15,32).rotateX(-Math.PI/2), new THREE.MeshBasicMaterial({color:0x38d6c4})); reticle.matrixAutoUpdate = false; scene.add(reticle); }
+  placedXR = false; anchor.visible = false; xrYaw = 0; anchor.scale.setScalar(1);
+  $('bar').style.display = 'none'; $('xrbar').style.display = 'flex'; $('top').style.display = 'none';
+  $('hint').style.display = 'block'; $('hint').innerHTML = 'Mueve el celular para detectar el piso y <b>toca</b> donde quieres el modelo.';
+  xrSession.addEventListener('select', () => {
+    if (!reticle.visible) return;
+    const p = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
+    anchor.position.set(p.x, p.y + S.qrH, p.z);   // la base del modelo queda en el piso
+    anchor.rotation.set(0, xrYaw, 0); anchor.visible = true; placedXR = true; $('hint').style.display = 'none';
+  });
+  xrSession.addEventListener('end', () => { if (mode === 'xr') endXR(true); });
+  $('ui').addEventListener('beforexrselect', e => e.preventDefault());
+}
+async function endXR(fromEvent){
+  const s = xrSession; xrSession = null; hitSource = null;
+  if (s && !fromEvent) { try { await s.end(); } catch(e){} }
+  renderer.xr.enabled = false; if (reticle) reticle.visible = false;
+  $('bar').style.display = ''; $('xrbar').style.display = 'none'; $('top').style.display = 'flex';
+  mode = ''; setMode('3d');
+}
+$('xEnd').onclick = () => endXR();
+const xrTurn = d => { xrYaw += d; if (placedXR) anchor.rotation.set(0, xrYaw, 0); };
+$('xL').onclick = () => xrTurn(Math.PI/12); $('xR').onclick = () => xrTurn(-Math.PI/12);
+$('xM').onclick = () => { anchor.scale.multiplyScalar(.85); toast('Escala ' + Math.round(anchor.scale.x*100) + ' %'); };
+$('xP').onclick = () => { anchor.scale.multiplyScalar(1/.85); toast('Escala ' + Math.round(anchor.scale.x*100) + ' %'); };
+$('xParts').onclick = () => openDrawer(true);
+
+/* ---------- bucle de dibujo ---------- */
+const clock = new THREE.Clock(); let fpsT = 0, fpsN = 0;
+const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+function frame(t, xrFrame){
+  const dt = Math.min(clock.getDelta(), .1);
+  if (mode === 'cam') {
+    const tracking = performance.now() - lastSeen < 700;
+    if (qrSeen) {
+      let useGyro = S.gyro && haveGyro && qDev0;
+      if (useGyro) {            // el QR queda fijo en el mundo mientras giras el celular
+        _q2.copy(qDev).invert().multiply(qDev0);          // rotación relativa (cámara ahora ← cámara entonces)
+        tgtQuat.copy(_q2).multiply(quat0); tgtPos.copy(pos0).applyQuaternion(_q2);
+      } else { tgtQuat.copy(quat0); tgtPos.copy(pos0); }
+      const k = 1 - Math.exp(-dt*(tracking ? 14 : 30));
+      anchor.position.lerp(tgtPos, k); anchor.quaternion.slerp(tgtQuat, k);
+      anchor.visible = tracking || (useGyro ? true : (performance.now() - lastSeen < 1500));
+    }
+    if (Math.round(t/250) !== fpsT) { fpsT = Math.round(t/250); updateHint(); }
+  } else if (mode === 'xr' && xrFrame && hitSource) {
+    const hits = xrFrame.getHitTestResults(hitSource), ref = renderer.xr.getReferenceSpace();
+    if (hits.length && !placedXR) { reticle.visible = true; reticle.matrix.fromArray(hits[0].getPose(ref).transform.matrix); $('hint').style.display = 'block'; }
+    else if (!placedXR) reticle.visible = false;
+    if (placedXR) reticle.visible = false;
+  } else if (mode === '3d') orbit.update();
+  placeLabel();
+  renderer.render(scene, mode === 'xr' ? renderer.xr.getCamera() : activeCam);
+}
+renderer.setAnimationLoop(frame);
+
+/* ---------- panel: cajones, ajustes y avance ---------- */
+let toastT = 0;
+function toast(msg, ms = 2600){ const el = $('toast'); el.textContent = msg; el.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => el.style.display = 'none', ms); }
+function openDrawer(on){ $('drawer').classList.toggle('open', on); $('bParts').classList.toggle('on', on); if (on) $('sheet').classList.remove('open'); }
+function openSheet(on){ $('sheet').classList.toggle('open', on); $('bSet').classList.toggle('on', on); if (on) $('drawer').classList.remove('open'); }
+$('bParts').onclick = () => openDrawer(!$('drawer').classList.contains('open')); $('dClose').onclick = () => openDrawer(false);
+$('bSet').onclick = () => openSheet(!$('sheet').classList.contains('open')); $('sClose').onclick = () => openSheet(false);
+$('bProg').onclick = () => { showProg = !showProg; $('bProg').classList.toggle('on', showProg); refreshMaterials(); updateProgress(); };
+$('bLoad').onclick = () => $('file').click();
+$('file').onchange = e => { loadFiles(e.target.files); e.target.value = ''; };
+
+const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','oz','ox','yaw','unit','zup','opa','helpers'];
+FIELDS.forEach(k => {
+  const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k];
+  el.addEventListener('input', () => {
+    S[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range' ? (parseFloat(el.value) || 0) : el.value);
+    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','oz','ox','yaw'].includes(k)) applyPlacement();
+    if (k === 'qrSize') helpers.userData.qr.scale.setScalar(S.qrSize/100);
+    if (k === 'fov') fitCam();
+    if (k === 'opa') refreshMaterials();
+    if (k === 'helpers') helpers.visible = mode === '3d' && S.helpers;
+    if (k === 'gyro' && S.gyro) startGyro();
+    saveS();
+  });
+});
+
+function download(name, text, type){ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
+$('pExpJ').onclick = () => download('avance_planta.json', JSON.stringify({modelo:modelKey, fecha:new Date().toISOString(), piezas:parts.map(p => ({nombre:p.name, estado:p.state}))}, null, 1), 'application/json');
+$('pExpC').onclick = () => download('avance_planta.csv', '﻿nombre;estado\n' + parts.map(p => '"' + p.name.replace(/"/g,'""') + '";' + ['Pendiente','En proceso','Terminado'][p.state]).join('\n'), 'text/csv');
+$('pImp').onclick = () => $('fileProg').click();
+$('fileProg').onchange = async e => {
+  try {
+    const d = JSON.parse(await e.target.files[0].text()), by = new Map(d.piezas.map(p => [p.nombre, p.estado | 0]));
+    let n = 0; parts.forEach((p, i) => { if (by.has(p.name)) { p.state = by.get(p.name); n++; } });
+    saveProgress(); buildList(); refreshMaterials(); updateProgress(); toast('Avance aplicado a ' + n + ' piezas');
+  } catch(err) { toast('Archivo de avance no válido', 4000); }
+  e.target.value = '';
+};
+$('pReset').onclick = () => { if (confirm('¿Reiniciar el avance de todas las piezas a Pendiente?')) { parts.forEach(p => p.state = 0); saveProgress(); buildList(); refreshMaterials(); updateProgress(); } };
+
+/* arrastrar archivos en PC */
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files); });
+
+/* ---------- arranque ---------- */
+unitOverride = 1;           // el modelo de demostración ya está en metros
+registerModel(buildDemo(), 'demo');
+fitCam();
+renderer.setClearColor(0x0b1219, 1); scene.background = new THREE.Color(0x0b1219);
+helpers.visible = S.helpers; orbit.enabled = true; activeCam = cam3d; mode = '3d';
+setChip('', 'Vista 3D');
+if (new URLSearchParams(location.search).get('modo') === 'cam') setMode('cam'); else toast('Modelo de demostración. Pulsa “Cámara + QR” o carga tu archivo.', 4500);
+window.__ar.setMode = setMode; Object.defineProperty(window.__ar, 'parts', {get: () => parts}); window.__ar.S = S; window.__ar.loadFiles = loadFiles; window.__ar.select = select;
+window.__ar.getState = () => ({mode, qrSeen, lastSeen, tracking: performance.now() - lastSeen < 700});
+</script>
+</body>
+</html>
