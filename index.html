@@ -158,9 +158,12 @@ a{color:var(--acc)}
       <div class="f"><span>Mantener con giroscopio<small>Sigue girando si el QR sale de cuadro</small></span><input type="checkbox" id="gyro"></div>
     </fieldset>
     <fieldset><legend>Colocación del modelo</legend>
-      <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="point">Punto elegido en el modelo</option><option value="surface">QR pegado sobre el equipo</option><option value="file">Origen del archivo</option></select></div>
+      <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="point">Punto elegido en el modelo</option><option value="surface">QR pegado sobre el equipo</option><option value="face">QR sobre el equipo, con medidas</option><option value="file">Origen del archivo</option></select></div>
       <div class="f"><span>QR pegado en<small>Solo para “Centro de la base”, “Punto elegido” y “Origen”</small></span><select id="qrOn"><option value="wall">Pared</option><option value="floor">Piso</option></select></div>
       <div class="f"><span>Punto del equipo sobre el QR<small>Toca el punto del modelo que coincide con el centro del QR (QR en pared)</small></span><button class="btn" id="pickPt">Elegir punto</button></div>
+      <div class="f"><span>Cara del equipo con el QR<small>Solo con “QR sobre el equipo, con medidas”</small></span><select id="face"><option value="front">Frente (+Z)</option><option value="back">Atrás (−Z)</option><option value="right">Derecha (+X)</option><option value="left">Izquierda (−X)</option></select></div>
+      <div class="f"><span>Distancia desde el borde izquierdo (m)<small>Mirando esa cara de frente, hasta el centro del QR</small></span><input type="number" id="fh" step="0.05"></div>
+      <div class="f"><span>Altura del centro del QR al piso (m)<small>Medida en el equipo real</small></span><input type="number" id="fv" step="0.05"></div>
       <div class="f"><span>QR pegado sobre el equipo<small>Toca en el modelo el lugar exacto donde está el QR; se alinea con esa cara</small></span><button class="btn" id="pickSurf">Elegir lugar</button></div>
       <div class="f"><span>Subir (+) o bajar (−) respecto al QR (m)<small>Solo con “Punto elegido” u “Origen del archivo”</small></span><input type="number" id="oy" step="0.05"></div>
       <div class="f"><span>Separación de la pared (m)</span><input type="number" id="oz" step="0.05"></div>
@@ -198,7 +201,7 @@ const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => Math.min(b,Math.max(a,v));
 
 /* ---------- ajustes guardados ---------- */
-const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', nrm:null, qrOn:'wall', yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
+const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', nrm:null, qrOn:'wall', face:'front', fh:0.5, fv:1.0, yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
 let S = {...DEF};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ar_ajustes') || '{}')); } catch(e){}
 const saveS = () => { try { localStorage.setItem('ar_ajustes', JSON.stringify(S)); } catch(e){} };
@@ -298,16 +301,24 @@ let pickingPt = false;
 function applyPlacement(){
   const yaw = S.yaw * Math.PI/180, Y = new THREE.Vector3(0,1,0), Z = new THREE.Vector3(0,0,1);
   const q = new THREE.Quaternion(), c = new THREE.Vector3(), T = new THREE.Vector3(S.ox, S.oy, S.oz);
-  const okPt = !!S.pt && S.ptKey === ptKeyNow(), onSurf = S.origin === 'surface', floor = S.qrOn === 'floor' && !onSurf;
+  const okPt = !!S.pt && S.ptKey === ptKeyNow(), onSurf = S.origin === 'surface' || S.origin === 'face', floor = S.qrOn === 'floor' && !onSurf;
   surf.rotation.set(floor ? Math.PI/2 : 0, 0, 0);
-  if (onSurf && okPt && S.nrm) {
+  let usePt = null, useN = null;
+  if (S.origin === 'face') {
+    const b = modelBox, y = b.min.y + S.fv, h = S.fh;
+    if (S.face === 'front') { usePt = [b.min.x + h, y, b.max.z]; useN = [0,0,1]; }
+    else if (S.face === 'back') { usePt = [b.max.x - h, y, b.min.z]; useN = [0,0,-1]; }
+    else if (S.face === 'right') { usePt = [b.max.x, y, b.max.z - h]; useN = [1,0,0]; }
+    else { usePt = [b.min.x, y, b.min.z + h]; useN = [-1,0,0]; }
+  } else if (S.origin === 'surface' && okPt && S.nrm) { usePt = S.pt; useN = S.nrm; }
+  if (usePt) {
     // el QR está pegado sobre el equipo: la normal de la cara tocada mira hacia ti
-    const zq = new THREE.Vector3().fromArray(S.nrm).normalize();
+    const zq = new THREE.Vector3().fromArray(useN).normalize();
     const up = Math.abs(zq.y) < 0.9 ? Y.clone() : new THREE.Vector3(0,0,-1);
     const yq = up.sub(zq.clone().multiplyScalar(up.dot(zq))).normalize(), xq = new THREE.Vector3().crossVectors(yq, zq);
     q.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xq, yq, zq).invert());
     q.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, yaw));
-    c.fromArray(S.pt);
+    c.fromArray(usePt);
   } else {
     q.setFromAxisAngle(Y, yaw);
     if (S.origin === 'base') {
@@ -315,8 +326,8 @@ function applyPlacement(){
       T.y = floor ? 0 : -S.qrH;
     } else if (S.origin === 'point' && okPt) c.fromArray(S.pt);
   }
-  ptMarker.visible = (S.origin === 'point' || onSurf) && okPt;
-  if (ptMarker.visible) ptMarker.position.fromArray(S.pt);
+  const mk = usePt || (S.origin === 'point' && okPt ? S.pt : null);
+  ptMarker.visible = !!mk; if (mk) ptMarker.position.fromArray(mk);
   holder.quaternion.copy(q);
   holder.position.copy(T).sub(c.applyQuaternion(q));
   const g = helpers.userData.grid, w = helpers.userData.wall;
@@ -756,13 +767,14 @@ $('pickPt').onclick = () => { pickingPt = 'point'; toggleMeasure(false); openShe
 $('bLoad').onclick = () => $('file').click();
 $('file').onchange = e => { loadFiles(e.target.files); e.target.value = ''; };
 
-const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','qrOn','oz','ox','oy','yaw','unit','zup','opa','helpers'];
+const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','qrOn','face','fh','fv','oz','ox','oy','yaw','unit','zup','opa','helpers'];
 function syncFields(){ FIELDS.forEach(k => { const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k]; }); }
 FIELDS.forEach(k => {
   const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k];
   el.addEventListener('input', () => {
     S[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range' ? (parseFloat(el.value) || 0) : el.value);
-    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','qrOn','oz','ox','oy','yaw'].includes(k)) applyPlacement();
+    if (k === 'origin' && (S.origin === 'face' || S.origin === 'surface')) { S.ox = S.oy = S.oz = 0; S.yaw = 0; syncFields(); }
+    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','qrOn','face','fh','fv','oz','ox','oy','yaw'].includes(k)) applyPlacement();
     if (k === 'qrSize') helpers.userData.qr.scale.setScalar(S.qrSize/100);
     if (k === 'fov') fitCam();
     if (k === 'opa') refreshMaterials();
