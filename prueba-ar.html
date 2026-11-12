@@ -1,0 +1,28 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prueba de AR</title>
+<style>body{margin:0;background:#0b1219;color:#e8f0f5;font:16px/1.45 system-ui,sans-serif;padding:20px}h1{font-size:20px}.r{padding:12px 14px;border-radius:12px;margin:10px 0;background:#162430}.ok{border-left:6px solid #34c38f}.no{border-left:6px solid #ff6b6b}.w{border-left:6px solid #ffb547}button{font:700 16px system-ui;padding:14px 18px;border-radius:12px;border:0;background:#38d6c4;color:#04201c;width:100%;margin-top:10px}small{color:#8da2b2}</style></head>
+<body><h1>¿Mi celular sirve para AR con ARCore?</h1><div id="out"></div>
+<button id="go" style="display:none">Probar abrir AR (y lectura del QR)</button>
+<p><small>Si algo sale en rojo, toma una captura y envíala.</small></p>
+<script>
+const out=document.getElementById('out');
+const add=(cls,t)=>{const d=document.createElement('div');d.className='r '+cls;d.innerHTML=t;out.appendChild(d)};
+add(/Android/i.test(navigator.userAgent)?'ok':'w','Sistema: '+(navigator.userAgent.match(/Android [\d.]+/)||['no es Android'])[0]);
+add(/Chrome\/\d+/.test(navigator.userAgent)?'ok':'w','Navegador: '+((navigator.userAgent.match(/Chrome\/[\d]+/)||['no es Chrome'])[0]));
+add(window.isSecureContext?'ok':'no','Página segura (HTTPS): '+(window.isSecureContext?'sí':'no'));
+if(!navigator.xr){add('no','<b>Este navegador no tiene WebXR.</b> Usa Chrome actualizado en Android.');}
+else navigator.xr.isSessionSupported('immersive-ar').then(ok=>{
+  if(ok){add('ok','<b>AR compatible (ARCore):</b> sí. Pulsa el botón para la prueba final.');document.getElementById('go').style.display='block';}
+  else add('no','<b>AR compatible (ARCore): no.</b> Tu celular no está certificado por Google o falta instalar "Servicios de Google Play para RA".');
+}).catch(e=>add('no','Error al consultar AR: '+e.message));
+document.getElementById('go').onclick=async()=>{
+  try{const s=await navigator.xr.requestSession('immersive-ar',{optionalFeatures:['camera-access','hit-test','anchors']});
+    const f=s.enabledFeatures||[];
+    await s.end();
+    add('ok','<b>Sesión AR abierta correctamente.</b>');
+    add(f.includes('camera-access')?'ok':'w','Lectura del QR dentro de AR (camera-access): '+(f.includes('camera-access')?'sí':'no o desconocido'));
+    add(f.includes('hit-test')?'ok':'w','Detección del piso (hit-test): '+(f.includes('hit-test')?'sí':'no o desconocido'));
+    add(f.includes('anchors')?'ok':'w','Anclas fijas (anchors): '+(f.includes('anchors')?'sí':'no o desconocido'));
+  }catch(e){add('no','No se pudo abrir AR: '+e.message);}
+};
+</script></body></html>
