@@ -158,8 +158,10 @@ a{color:var(--acc)}
       <div class="f"><span>Mantener con giroscopio<small>Sigue girando si el QR sale de cuadro</small></span><input type="checkbox" id="gyro"></div>
     </fieldset>
     <fieldset><legend>Colocación del modelo</legend>
-      <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="point">Punto elegido en el modelo</option><option value="file">Origen del archivo</option></select></div>
-      <div class="f"><span>Punto del equipo sobre el QR<small>Toca el punto del modelo que quieres hacer coincidir con el centro del QR</small></span><button class="btn" id="pickPt">Elegir punto</button></div>
+      <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="point">Punto elegido en el modelo</option><option value="surface">QR pegado sobre el equipo</option><option value="file">Origen del archivo</option></select></div>
+      <div class="f"><span>QR pegado en<small>Solo para “Centro de la base”, “Punto elegido” y “Origen”</small></span><select id="qrOn"><option value="wall">Pared</option><option value="floor">Piso</option></select></div>
+      <div class="f"><span>Punto del equipo sobre el QR<small>Toca el punto del modelo que coincide con el centro del QR (QR en pared)</small></span><button class="btn" id="pickPt">Elegir punto</button></div>
+      <div class="f"><span>QR pegado sobre el equipo<small>Toca en el modelo el lugar exacto donde está el QR; se alinea con esa cara</small></span><button class="btn" id="pickSurf">Elegir lugar</button></div>
       <div class="f"><span>Subir (+) o bajar (−) respecto al QR (m)<small>Solo con “Punto elegido” u “Origen del archivo”</small></span><input type="number" id="oy" step="0.05"></div>
       <div class="f"><span>Separación de la pared (m)</span><input type="number" id="oz" step="0.05"></div>
       <div class="f"><span>Desplazar a la derecha (m)</span><input type="number" id="ox" step="0.05"></div>
@@ -196,7 +198,7 @@ const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => Math.min(b,Math.max(a,v));
 
 /* ---------- ajustes guardados ---------- */
-const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
+const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', nrm:null, qrOn:'wall', yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
 let S = {...DEF};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ar_ajustes') || '{}')); } catch(e){}
 const saveS = () => { try { localStorage.setItem('ar_ajustes', JSON.stringify(S)); } catch(e){} };
@@ -221,7 +223,8 @@ orbit.target.set(0, -0.8, 0.6); orbit.enableDamping = true; orbit.enabled = fals
 const anchor = new THREE.Group();      // = el QR (x derecha, y arriba, z hacia ti)
 const holder = new THREE.Group();      // colocación del modelo respecto al QR
 const pivot = new THREE.Group();       // escala y eje arriba
-anchor.add(holder); holder.add(pivot); scene.add(anchor);
+const surf = new THREE.Group();     // gira el modelo si el QR está en el piso
+anchor.add(surf); surf.add(holder); holder.add(pivot); scene.add(anchor);
 
 const helpers = new THREE.Group(); anchor.add(helpers);
 (function(){
@@ -293,21 +296,32 @@ const ptMarker = new THREE.Mesh(new THREE.SphereGeometry(.02, 14, 10), new THREE
 ptMarker.renderOrder = 12; ptMarker.visible = false; holder.add(ptMarker);
 let pickingPt = false;
 function applyPlacement(){
-  const yaw = S.yaw * Math.PI/180;
-  holder.rotation.set(0, yaw, 0);
-  let c = new THREE.Vector3(), T = new THREE.Vector3(S.ox, 0, S.oz);
-  if (S.origin === 'base') {
-    c.set((modelBox.min.x+modelBox.max.x)/2, modelBox.min.y, (modelBox.min.z+modelBox.max.z)/2);
-    T.y = -S.qrH;
+  const yaw = S.yaw * Math.PI/180, Y = new THREE.Vector3(0,1,0), Z = new THREE.Vector3(0,0,1);
+  const q = new THREE.Quaternion(), c = new THREE.Vector3(), T = new THREE.Vector3(S.ox, S.oy, S.oz);
+  const okPt = !!S.pt && S.ptKey === ptKeyNow(), onSurf = S.origin === 'surface', floor = S.qrOn === 'floor' && !onSurf;
+  surf.rotation.set(floor ? Math.PI/2 : 0, 0, 0);
+  if (onSurf && okPt && S.nrm) {
+    // el QR está pegado sobre el equipo: la normal de la cara tocada mira hacia ti
+    const zq = new THREE.Vector3().fromArray(S.nrm).normalize();
+    const up = Math.abs(zq.y) < 0.9 ? Y.clone() : new THREE.Vector3(0,0,-1);
+    const yq = up.sub(zq.clone().multiplyScalar(up.dot(zq))).normalize(), xq = new THREE.Vector3().crossVectors(yq, zq);
+    q.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xq, yq, zq).invert());
+    q.premultiply(new THREE.Quaternion().setFromAxisAngle(Z, yaw));
+    c.fromArray(S.pt);
   } else {
-    T.y = S.oy;
-    if (S.origin === 'point' && S.pt && S.ptKey === ptKeyNow()) c.fromArray(S.pt);
+    q.setFromAxisAngle(Y, yaw);
+    if (S.origin === 'base') {
+      c.set((modelBox.min.x+modelBox.max.x)/2, modelBox.min.y, (modelBox.min.z+modelBox.max.z)/2);
+      T.y = floor ? 0 : -S.qrH;
+    } else if (S.origin === 'point' && okPt) c.fromArray(S.pt);
   }
-  ptMarker.visible = S.origin === 'point' && !!S.pt && S.ptKey === ptKeyNow();
+  ptMarker.visible = (S.origin === 'point' || onSurf) && okPt;
   if (ptMarker.visible) ptMarker.position.fromArray(S.pt);
-  holder.position.copy(T).sub(c.applyAxisAngle(new THREE.Vector3(0,1,0), yaw));
-  helpers.userData.grid.position.y = -S.qrH;
-  helpers.userData.wall.position.y = 1.3 - S.qrH;
+  holder.quaternion.copy(q);
+  holder.position.copy(T).sub(c.applyQuaternion(q));
+  const g = helpers.userData.grid, w = helpers.userData.wall;
+  g.visible = !onSurf; g.rotation.x = floor ? Math.PI/2 : 0; g.position.set(0, floor ? 0 : -S.qrH, 0);
+  w.visible = !floor && !onSurf; w.position.y = 1.3 - S.qrH;
   holder.updateMatrixWorld(true);
   updateMeasureVisual();
 }
@@ -487,7 +501,18 @@ function pick(ev){
   ray.setFromCamera(new THREE.Vector2(((ev.clientX - r.left)/r.width)*2 - 1, -((ev.clientY - r.top)/r.height)*2 + 1), activeCam);
   const hit = ray.intersectObjects(parts.filter(p => p.mesh.visible).map(p => p.mesh), false)[0];
   if (!hit) { if (!measuring && !pickingPt) select(-1); return; }
-  if (pickingPt) { pickingPt = false; S.pt = holder.worldToLocal(hit.point.clone()).toArray(); S.ptKey = ptKeyNow(); S.origin = 'point'; $('origin').value = 'point'; saveS(); applyPlacement(); toast('Punto fijado sobre el QR. Ajusta separación y altura si hace falta.', 4500); }
+  if (pickingPt) {
+    const kind = pickingPt; pickingPt = false;
+    S.pt = holder.worldToLocal(hit.point.clone()).toArray(); S.ptKey = ptKeyNow();
+    if (kind === 'surface') {
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      if (n.dot(ray.ray.direction) > 0) n.negate();
+      n.transformDirection(new THREE.Matrix4().copy(holder.matrixWorld).invert());
+      S.nrm = n.toArray(); S.origin = 'surface'; S.ox = S.oy = S.oz = 0; S.yaw = 0;
+    } else S.origin = 'point';
+    syncFields(); saveS(); applyPlacement();
+    toast(kind === 'surface' ? 'Listo: el QR queda en ese lugar, mirando hacia ti. Si sale girado, cambia el Giro de 90 en 90.' : 'Punto fijado sobre el QR. Ajusta separación y altura si hace falta.', 5500);
+  }
   else if (measuring) { addPoint(hit.point); }
   else select(hit.object.userData.idx, true);
 }
@@ -726,16 +751,18 @@ function openSheet(on){ $('sheet').classList.toggle('open', on); $('bSet').class
 $('bParts').onclick = () => openDrawer(!$('drawer').classList.contains('open')); $('dClose').onclick = () => openDrawer(false);
 $('bSet').onclick = () => openSheet(!$('sheet').classList.contains('open')); $('sClose').onclick = () => openSheet(false);
 $('bProg').onclick = () => { showProg = !showProg; $('bProg').classList.toggle('on', showProg); refreshMaterials(); updateProgress(); };
-$('pickPt').onclick = () => { pickingPt = true; toggleMeasure(false); openSheet(false); toast('Toca en el modelo el punto que quedará sobre el QR', 6000); };
+$('pickSurf').onclick = () => { pickingPt = 'surface'; toggleMeasure(false); openSheet(false); toast('Toca en el modelo el lugar exacto donde está pegado el QR', 6000); };
+$('pickPt').onclick = () => { pickingPt = 'point'; toggleMeasure(false); openSheet(false); toast('Toca en el modelo el punto que quedará sobre el QR', 6000); };
 $('bLoad').onclick = () => $('file').click();
 $('file').onchange = e => { loadFiles(e.target.files); e.target.value = ''; };
 
-const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','oz','ox','oy','yaw','unit','zup','opa','helpers'];
+const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','qrOn','oz','ox','oy','yaw','unit','zup','opa','helpers'];
+function syncFields(){ FIELDS.forEach(k => { const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k]; }); }
 FIELDS.forEach(k => {
   const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k];
   el.addEventListener('input', () => {
     S[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range' ? (parseFloat(el.value) || 0) : el.value);
-    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','oz','ox','oy','yaw'].includes(k)) applyPlacement();
+    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','qrOn','oz','ox','oy','yaw'].includes(k)) applyPlacement();
     if (k === 'qrSize') helpers.userData.qr.scale.setScalar(S.qrSize/100);
     if (k === 'fov') fitCam();
     if (k === 'opa') refreshMaterials();
