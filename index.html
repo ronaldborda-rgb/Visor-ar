@@ -95,7 +95,7 @@ a{color:var(--acc)}
   <div id="top">
     <div class="panel seg" id="modes">
       <button data-m="cam" class="on">Cámara + QR</button>
-      <button data-m="xr" id="btnXR">AR en piso</button>
+      <button data-m="xr" id="btnXR">AR fijo</button>
       <button data-m="3d">Vista 3D</button>
     </div>
     <div class="panel" id="chip"><i></i><span id="chipTxt">Listo</span></div>
@@ -147,12 +147,15 @@ a{color:var(--acc)}
     <button id="bLoad"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M4 17v4h16v-4"/></svg>Cargar</button>
   </div>
 
-  <div id="xrbar" class="panel">
+  <div id="xrbar" class="panel" style="flex-wrap:wrap;justify-content:center;max-width:94vw">
+    <button class="btn" id="xLock">Bloquear</button>
+    <button class="btn" id="xRe">Reubicar</button>
+    <button class="btn" id="xCmp">Comparar</button>
+    <button class="btn" id="xParts">Piezas</button>
     <button class="btn" id="xL">⟲ 15°</button>
     <button class="btn" id="xR">⟳ 15°</button>
     <button class="btn" id="xM">Escala −</button>
     <button class="btn" id="xP">Escala +</button>
-    <button class="btn" id="xParts">Piezas</button>
     <button class="btn" id="xEnd">Salir</button>
   </div>
 
@@ -734,26 +737,9 @@ function refinePose(A, pts, f, cx, cy){
   }
   return M;
 }
-function scanFrame(){
-  if (mode !== 'cam' || !video.videoWidth || (frozen && !capture)) return;
-  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 960/Math.max(vw, vh));
-  const W = scan.width = Math.round(vw*k), Hh = scan.height = Math.round(vh*k);
-  sctx.drawImage(video, 0, 0, W, Hh);
-  const now = performance.now(), dets = [];
-  let r = detectOne(sctx.getImageData(0, 0, W, Hh), W, Hh);
-  for (let pass = 0; r && pass < 3; pass++) {
-    const mi = markerOf(r);
-    if (mi > -2 && !dets.some(d => d.mi === mi)) dets.push({r, mi});
-    if (pass === 2 || dets.length === 2 || (!S.multi && (mi > -2 || !S.qrText))) break;
-    // tapar el QR encontrado y buscar un segundo QR en la misma imagen
-    const L = r.location, c = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner];
-    const mx = c.reduce((s, p) => s + p.x, 0)/4, my = c.reduce((s, p) => s + p.y, 0)/4;
-    sctx.fillStyle = '#fff'; sctx.beginPath(); c.forEach((p, i) => { const x = mx + (p.x-mx)*1.35, y = my + (p.y-my)*1.35; i ? sctx.lineTo(x, y) : sctx.moveTo(x, y); }); sctx.fill();
-    r = detectOne(sctx.getImageData(0, 0, W, Hh), W, Hh);
-  }
-  if (!dets.length) return;
-  const f = focalPx(), cx = vw/2, cy = vh/2, pts = [];
-  let best = null;
+// pose del QR de referencia (en el sistema de la cámara) a partir de las lecturas de jsQR de un cuadro
+function solveFromDets(dets, k, f, cx, cy){
+  const pts = []; let best = null;
   dets.forEach(d => {
     const size = (d.mi >= 0 ? +S.markers[d.mi].size : S.qrSize)/100;
     if (calibPending) finishCalib(d.r, k, size);
@@ -766,14 +752,40 @@ function scanFrame(){
     const area = Math.abs((P.px[1][0]-P.px[0][0])*(P.px[2][1]-P.px[0][1]) - (P.px[2][0]-P.px[0][0])*(P.px[1][1]-P.px[0][1]));
     if (!best || area > best.area) best = {A, area, d, c:new THREE.Vector3().setFromMatrixPosition(Pm)};
   });
-  if (!best) return;
-  let M = dets.length > 1 ? refinePose(best.A, pts, f, cx, cy) : best.A;
+  if (!best) return null;
+  return {M: dets.length > 1 ? refinePose(best.A, pts, f, cx, cy) : best.A, best};
+}
+function rotateAbout(M, c, q){
+  return new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)).multiply(M);
+}
+// lee hasta 3 QR en un cuadro (tapa cada uno que encuentra para buscar otro)
+function detectAll(ctx, W, Hh){
+  const dets = []; let r = detectOne(ctx.getImageData(0, 0, W, Hh), W, Hh);
+  for (let pass = 0; r && pass < 3; pass++) {
+    const mi = markerOf(r);
+    if (mi > -2 && !dets.some(d => d.mi === mi)) dets.push({r, mi});
+    if (pass === 2 || dets.length === 2 || (!S.multi && (mi > -2 || !S.qrText))) break;
+    const L = r.location, c = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner];
+    const mx = c.reduce((t, p) => t + p.x, 0)/4, my = c.reduce((t, p) => t + p.y, 0)/4;
+    ctx.fillStyle = '#fff'; ctx.beginPath(); c.forEach((p, i) => { const x = mx + (p.x-mx)*1.35, y = my + (p.y-my)*1.35; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.fill();
+    r = detectOne(ctx.getImageData(0, 0, W, Hh), W, Hh);
+  }
+  return dets;
+}
+function scanFrame(){
+  if (mode !== 'cam' || !video.videoWidth || (frozen && !capture)) return;
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 960/Math.max(vw, vh));
+  const W = scan.width = Math.round(vw*k), Hh = scan.height = Math.round(vh*k);
+  sctx.drawImage(video, 0, 0, W, Hh);
+  const now = performance.now(), dets = detectAll(sctx, W, Hh);
+  if (!dets.length) return;
+  const sol = solveFromDets(dets, k, focalPx(), vw/2, vh/2); if (!sol) return;
+  let M = sol.M; const best = sol.best;
   if (S.grav && haveGyro && dets.length === 1 && qrIsVertical()) {
     // el sistema de referencia es vertical: su eje "arriba" debe coincidir con la gravedad que mide el celular (giro alrededor del QR visto)
     const pq = new THREE.Quaternion(); M.decompose(new THREE.Vector3(), pq, new THREE.Vector3());
     const ug = new THREE.Vector3(0,1,0).applyQuaternion(qDev.clone().invert()), ua = new THREE.Vector3(0,1,0).applyQuaternion(pq);
-    const Rg = new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(ua, ug));
-    const c = best.c; M = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(Rg).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)).multiply(M);
+    M = rotateAbout(M, best.c, new THREE.Quaternion().setFromUnitVectors(ua, ug));
   }
   const pm = new THREE.Vector3(), qm = new THREE.Quaternion(); M.decompose(pm, qm, new THREE.Vector3());
   if (capture) {
@@ -850,30 +862,111 @@ async function setMode(m){
 }
 document.querySelectorAll('#modes button').forEach(b => b.onclick = () => b.dataset.m === 'xr' ? startXR() : setMode(b.dataset.m));
 
-/* ---------- AR nativo en el piso (WebXR, Android/Chrome) ---------- */
-let xrSession = null, hitSource = null, reticle = null, placedXR = false, xrYaw = 0;
+/* ---------- AR fijo (WebXR + ARCore, solo Android compatible) ----------
+   El celular calcula su propio movimiento (ARCore). Se lee el QR una vez con la imagen de la cámara
+   de ARCore (camera-access) y el diseño queda anclado al mundo; no hace falta volver a ver el QR. */
+let xrSession = null, hitSource = null, reticle = null, placedXR = false, xrYaw = 0, xrRef = null, xrGL = null, xrBinding = null;
+let xrQR = false, xrLocked = false, xrLastScan = 0, xrFixes = 0, xrDiag = '', xrLastErr = '';
 const btnXR = $('btnXR');
 btnXR.style.display = 'none';
 if (navigator.xr && navigator.xr.isSessionSupported) navigator.xr.isSessionSupported('immersive-ar').then(ok => { if (ok) btnXR.style.display = ''; }).catch(()=>{});
-else btnXR.style.display = 'none';
+
+// copia la textura de la cámara de ARCore a un cuadro legible (RGBA) para jsQR
+let rd = null;
+function readTexture(gl, tex, w, h, flipY){
+  if (!rd || rd.gl !== gl) {
+    const vs = 'attribute vec2 p;varying vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
+    const fs = 'precision mediump float;uniform sampler2D t;varying vec2 uv;void main(){gl_FragColor=texture2D(t,uv);}';
+    const mk = (t, src) => { const sh = gl.createShader(t); gl.shaderSource(sh, src); gl.compileShader(sh); return sh; };
+    const pr = gl.createProgram(); gl.attachShader(pr, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    rd = {gl, pr, buf, fbo:gl.createFramebuffer(), tex:gl.createTexture(), w:0, h:0};
+  }
+  if (rd.w !== w || rd.h !== h) { gl.bindTexture(gl.TEXTURE_2D, rd.tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rd.fbo); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rd.tex, 0); rd.w = w; rd.h = h; }
+  const prev = {fb:gl.getParameter(gl.FRAMEBUFFER_BINDING), pr:gl.getParameter(gl.CURRENT_PROGRAM), vp:gl.getParameter(gl.VIEWPORT), tx:gl.getParameter(gl.TEXTURE_BINDING_2D), ab:gl.getParameter(gl.ARRAY_BUFFER_BINDING)};
+  gl.bindFramebuffer(gl.FRAMEBUFFER, rd.fbo); gl.viewport(0, 0, w, h); gl.useProgram(rd.pr);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(gl.getUniformLocation(rd.pr, 't'), 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, rd.buf); const loc = gl.getAttribLocation(rd.pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE); gl.disable(gl.SCISSOR_TEST);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const px = new Uint8Array(w*h*4); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.disableVertexAttribArray(loc); gl.bindFramebuffer(gl.FRAMEBUFFER, prev.fb); gl.useProgram(prev.pr); gl.viewport(prev.vp[0], prev.vp[1], prev.vp[2], prev.vp[3]);
+  gl.bindTexture(gl.TEXTURE_2D, prev.tx); gl.bindBuffer(gl.ARRAY_BUFFER, prev.ab);
+  if (flipY) { const row = w*4, tmp = new Uint8Array(row); for (let y = 0; y < (h >> 1); y++) { const a2 = y*row, b2 = (h-1-y)*row; tmp.set(px.subarray(a2, a2+row)); px.copyWithin(a2, b2, b2+row); px.set(tmp, b2); } }
+  return px;
+}
+// intrínsecos de la cámara a partir de la matriz de proyección de la vista (convención de three.js)
+function intrinsicsFromProjection(P, W, H){ return {f:(P[0]*W/2 + P[5]*H/2)/2, cx:(1 - P[8])*W/2, cy:(1 + P[9])*H/2}; }
+// pose del QR de referencia en el mundo de AR, dada la pose de la cámara (matriz cámara→mundo) y las lecturas
+function xrWorldFromDets(dets, k, intr, camWorld, gravityUp){
+  const sol = solveFromDets(dets, k, intr.f, intr.cx, intr.cy); if (!sol) return null;
+  let M = new THREE.Matrix4().multiplyMatrices(camWorld, sol.M);                  // QR → mundo
+  if (gravityUp && dets.length === 1 && qrIsVertical()) {                          // el mundo de ARCore tiene Y hacia arriba
+    const pq = new THREE.Quaternion(), pp = new THREE.Vector3(); M.decompose(pp, pq, new THREE.Vector3());
+    const ua = new THREE.Vector3(0,1,0).applyQuaternion(pq);
+    M = rotateAbout(M, pp, new THREE.Quaternion().setFromUnitVectors(ua, new THREE.Vector3(0,1,0)));
+  }
+  return M;
+}
+function xrApplyFix(M, nDets){
+  const pm = new THREE.Vector3(), qm = new THREE.Quaternion(); M.decompose(pm, qm, new THREE.Vector3());
+  if (!placedXR) { anchor.position.copy(pm); anchor.quaternion.copy(qm); }
+  else {                                                                          // se corrige despacio; los saltos grandes solo si hay 2 QR
+    const d = anchor.position.distanceTo(pm), a = anchor.quaternion.angleTo(qm);
+    const kk = (d > .5 || a > .5) ? (nDets > 1 ? 1 : 0) : (nDets > 1 ? .5 : .25);
+    anchor.position.lerp(pm, kk); anchor.quaternion.slerp(qm, kk);
+  }
+  anchor.rotation.reorder('YXZ'); anchor.scale.setScalar(1);
+  anchor.visible = true; placedXR = true; xrFixes++; $('hint').style.display = 'none';
+}
+function xrScan(xrFrame){
+  const now = performance.now(); if (now - xrLastScan < 260 || xrLocked || !xrQR) return; xrLastScan = now;
+  try {
+    const pose = xrFrame.getViewerPose(xrRef); if (!pose) return;
+    const view = pose.views.find(v => v.camera); if (!view) { xrDiag = 'la vista no trae imagen de cámara'; return; }
+    const cam = view.camera, CW = cam.width, CH = cam.height, k = Math.min(1, 960/Math.max(CW, CH)), w = Math.round(CW*k), h = Math.round(CH*k);
+    const tex = xrBinding.getCameraImage(cam), px = readTexture(xrGL, tex, w, h, true);
+    scan.width = w; scan.height = h; const id = new ImageData(new Uint8ClampedArray(px.buffer), w, h); sctx.putImageData(id, 0, 0);
+    renderer.resetState();
+    const dets = detectAll(sctx, w, h); xrDiag = dets.length ? '' : 'buscando QR…';
+    if (!dets.length) return;
+    const intr = intrinsicsFromProjection(view.projectionMatrix, CW, CH), camWorld = new THREE.Matrix4().fromArray(view.transform.matrix);
+    const M = xrWorldFromDets(dets, k, intr, camWorld, S.grav); if (!M) return;
+    xrApplyFix(M, dets.length); lastMarker = dets[0].mi; lastCount = dets.length;
+  } catch(e) { xrLastErr = e.message; xrDiag = 'error leyendo la cámara: ' + e.message; }
+}
+function xrChip(){
+  if (mode !== 'xr') return;
+  if (!placedXR) setChip('warn', xrQR ? (xrDiag || 'Apunta al QR…') : 'Toca el piso para colocar');
+  else setChip('ok', xrLocked ? 'Anclado y bloqueado' : (xrQR ? 'Anclado · QR leído ' + xrFixes + '×' : 'Anclado en el piso'));
+}
 async function startXR(){
-  if (!navigator.xr) { toast('Este navegador no tiene AR nativo. Usa Chrome en un Android con ARCore.', 5000); return; }
+  if (!navigator.xr) { toast('Este navegador no tiene AR. Usa Chrome en un Android con ARCore.', 5000); return; }
   try {
     stopCamera(); video.style.display = 'none';
-    xrSession = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root:$('ui')}});
+    xrSession = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['camera-access','anchors','dom-overlay'], domOverlay:{root:$('ui')}});
   } catch(e) { toast('No se pudo iniciar AR: ' + (e.message || e), 6000); xrSession = null; return setMode('cam'); }
   mode = 'xr';
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m === 'xr'));
   renderer.xr.enabled = true; renderer.setClearColor(0, 0); scene.background = null; helpers.visible = false; orbit.enabled = false;
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(xrSession);
+  xrRef = renderer.xr.getReferenceSpace(); xrGL = renderer.getContext();
   const vs = await xrSession.requestReferenceSpace('viewer'); hitSource = await xrSession.requestHitTestSource({space:vs});
+  const feats = xrSession.enabledFeatures || [];
+  xrQR = feats.includes('camera-access') && typeof XRWebGLBinding !== 'undefined';
+  if (xrQR) { try { xrBinding = new XRWebGLBinding(xrSession, xrGL); } catch(e) { xrQR = false; xrDiag = 'sin lectura de QR: ' + e.message; } }
   if (!reticle) { reticle = new THREE.Mesh(new THREE.RingGeometry(.12,.15,32).rotateX(-Math.PI/2), new THREE.MeshBasicMaterial({color:0x38d6c4})); reticle.matrixAutoUpdate = false; scene.add(reticle); }
-  placedXR = false; anchor.visible = false; xrYaw = 0; anchor.scale.setScalar(1);
-  $('bar').style.display = 'none'; $('xrbar').style.display = 'flex'; $('top').style.display = 'none';
-  $('hint').style.display = 'block'; $('hint').innerHTML = 'Mueve el celular para detectar el piso y <b>toca</b> donde quieres el modelo.';
+  placedXR = false; anchor.visible = false; xrYaw = 0; xrLocked = false; xrFixes = 0; lastMarker = -1; lastCount = 0; anchor.scale.setScalar(1);
+  anchor.position.set(0,0,0); anchor.quaternion.identity();
+  $('bar').style.display = 'none'; $('xrbar').style.display = 'flex'; $('top').style.display = 'flex'; $('modes').style.display = 'none';
+  $('hint').style.display = 'block';
+  $('hint').innerHTML = xrQR ? 'Mueve el celular un momento y apunta al <b>QR</b> del equipo. Se fijará solo.<br><span style="color:var(--dim)">Si no lo lee, toca el piso para colocar a mano.</span>'
+    : 'Este navegador no deja leer el QR dentro de AR.<br>Mueve el celular y <b>toca</b> el piso para colocar el modelo.';
   xrSession.addEventListener('select', () => {
-    if (!reticle.visible) return;
+    if (xrLocked || !reticle.visible || (xrQR && placedXR)) return;
     const p = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
     anchor.position.set(p.x, p.y + S.qrH, p.z);   // la base del modelo queda en el piso
     anchor.rotation.set(0, xrYaw, 0); anchor.visible = true; placedXR = true; $('hint').style.display = 'none';
@@ -882,18 +975,22 @@ async function startXR(){
   $('ui').addEventListener('beforexrselect', e => e.preventDefault());
 }
 async function endXR(fromEvent){
-  const s = xrSession; xrSession = null; hitSource = null;
+  const s = xrSession; xrSession = null; hitSource = null; xrBinding = null; xrQR = false;
   if (s && !fromEvent) { try { await s.end(); } catch(e){} }
   renderer.xr.enabled = false; if (reticle) reticle.visible = false;
-  $('bar').style.display = ''; $('xrbar').style.display = 'none'; $('top').style.display = 'flex';
+  $('bar').style.display = ''; $('xrbar').style.display = 'none'; $('top').style.display = 'flex'; $('modes').style.display = '';
   mode = ''; setMode('3d');
 }
 $('xEnd').onclick = () => endXR();
-const xrTurn = d => { xrYaw += d; if (placedXR) anchor.rotation.set(0, xrYaw, 0); };
+$('xLock').onclick = () => { xrLocked = !xrLocked; $('xLock').classList.toggle('on', xrLocked); $('xLock').textContent = xrLocked ? 'Desbloquear' : 'Bloquear'; toast(xrLocked ? 'Anclaje bloqueado: ya no se corrige con el QR' : 'Se vuelve a corregir al ver el QR'); };
+$('xRe').onclick = () => { placedXR = false; xrFixes = 0; anchor.visible = false; $('hint').style.display = 'block'; };
+$('xCmp').onclick = () => $('bCmp').click();
+const xrTurn = d => { xrYaw += d; if (placedXR && !xrQR) anchor.rotation.set(0, xrYaw, 0); };
 $('xL').onclick = () => xrTurn(Math.PI/12); $('xR').onclick = () => xrTurn(-Math.PI/12);
 $('xM').onclick = () => { anchor.scale.multiplyScalar(.85); toast('Escala ' + Math.round(anchor.scale.x*100) + ' %'); };
 $('xP').onclick = () => { anchor.scale.multiplyScalar(1/.85); toast('Escala ' + Math.round(anchor.scale.x*100) + ' %'); };
 $('xParts').onclick = () => openDrawer(true);
+Object.assign(window.__ar, {readTexture, intrinsicsFromProjection, xrWorldFromDets, detectAll});
 
 /* ---------- bucle de dibujo ---------- */
 const clock = new THREE.Clock(); let fpsT = 0, fpsN = 0;
@@ -914,6 +1011,7 @@ function frame(t, xrFrame){
     }
     if (Math.round(t/250) !== fpsT) { fpsT = Math.round(t/250); updateHint(); }
   } else if (mode === 'xr' && xrFrame && hitSource) {
+    xrScan(xrFrame); if (Math.round(t/300) !== fpsT) { fpsT = Math.round(t/300); xrChip(); }
     const hits = xrFrame.getHitTestResults(hitSource), ref = renderer.xr.getReferenceSpace();
     if (hits.length && !placedXR) { reticle.visible = true; reticle.matrix.fromArray(hits[0].getPose(ref).transform.matrix); $('hint').style.display = 'block'; }
     else if (!placedXR) reticle.visible = false;
