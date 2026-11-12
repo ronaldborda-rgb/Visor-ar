@@ -69,6 +69,9 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:14px/1
 .f small{color:var(--dim);display:block;font-size:11px}
 #cmp{position:absolute;left:max(10px,env(safe-area-inset-left));right:max(10px,env(safe-area-inset-right));bottom:calc(max(12px,env(safe-area-inset-bottom)) + 70px);padding:10px 12px;display:none;max-width:460px;margin:0 auto;max-height:52vh;overflow:auto}
 #cmp .t{font-weight:700;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.mk{display:grid;grid-template-columns:auto 1fr 1fr;gap:6px;align-items:center;border-top:1px solid var(--line);padding:8px 0}
+.mk input,.mk select{width:100%;padding:7px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--txt);font-size:13px}
+.mk label{font-size:11px;color:var(--dim);display:block}
 .nudge{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
 .nudge .btn{padding:6px 4px;font-size:11px}
 #mlabel{position:absolute;display:none;transform:translate(-50%,-130%);background:#04201c;color:var(--acc);border:1px solid var(--acc);padding:4px 8px;border-radius:8px;font:700 12px system-ui;white-space:nowrap;pointer-events:none}
@@ -121,6 +124,7 @@ a{color:var(--acc)}
     <div class="f"><span>Opacidad del diseño</span><input type="range" id="opa2" min="10" max="100" step="5"></div>
     <div class="row2" style="margin:4px 0 8px">
       <button class="btn" id="cEdges">Solo contorno</button>
+      <button class="btn" id="cCap">Capturar vista</button>
       <button class="btn" id="cFreeze">Congelar</button>
       <button class="btn" id="cPhoto">Guardar foto</button>
     </div>
@@ -178,7 +182,17 @@ a{color:var(--acc)}
       <div class="f"><span>Texto del QR<small>Vacío = cualquier QR</small></span><input type="text" id="qrText" style="width:112px;padding:8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.07);color:var(--txt)"></div>
       <div class="f"><span>Altura del QR sobre el piso (m)</span><input type="number" id="qrH" step="0.05" min="0"></div>
       <div class="f"><span>Ángulo de la lente (°)<small>Si el modelo “flota” o cambia de tamaño al acercarte, ajusta aquí</small></span><input type="range" id="fov" min="45" max="95" step="1"></div>
+      <div class="f"><span>Enderezar con la gravedad<small>Usa el sensor del celular para que el diseño quede siempre vertical (QR en pared o en una cara del equipo)</small></span><input type="checkbox" id="grav"></div>
       <div class="f"><span>Mantener con giroscopio<small>Sigue girando si el QR sale de cuadro</small></span><input type="checkbox" id="gyro"></div>
+    </fieldset>
+    <fieldset><legend>Varios QR (uno por cara del equipo)</legend>
+      <div class="f"><span>Usar varios QR<small>Cada QR con su texto, la cara donde está y sus medidas. Reemplaza la colocación de abajo. El QR 1 es la referencia.</small></span><input type="checkbox" id="multi"></div>
+      <div id="mkList"></div>
+      <div class="row2"><button class="btn" id="mkAdd">Agregar QR</button></div>
+    </fieldset>
+    <fieldset><legend>Calibrar la lente de tu celular</legend>
+      <div class="f"><span>Distancia al QR (m)<small>Ponte de frente al QR, a esta distancia medida con cinta, y pulsa Calibrar</small></span><input type="number" id="calD" step="0.05" value="0.5"></div>
+      <div class="row2"><button class="btn" id="calGo">Calibrar ahora</button></div>
     </fieldset>
     <fieldset><legend>Colocación del modelo</legend>
       <div class="f"><span>Punto sobre el QR</span><select id="origin"><option value="base">Centro de la base (en el piso)</option><option value="point">Punto elegido en el modelo</option><option value="surface">QR pegado sobre el equipo</option><option value="face">QR sobre el equipo, con medidas</option><option value="file">Origen del archivo</option></select></div>
@@ -224,7 +238,7 @@ const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => Math.min(b,Math.max(a,v));
 
 /* ---------- ajustes guardados ---------- */
-const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', nrm:null, qrOn:'wall', face:'front', fh:0.5, fv:1.0, dx:0, dy:0, dz:0, edges:false, yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
+const DEF = {qrSize:15, qrText:'', qrH:1.5, fov:68, gyro:true, origin:'base', oz:0.6, ox:0, oy:0, pt:null, ptKey:'', nrm:null, qrOn:'wall', face:'front', fh:0.5, fv:1.0, dx:0, dy:0, dz:0, edges:false, grav:true, multi:false, markers:['front','front','right','right','back','back','left','left'].map((f, i) => ({text:'ECS700-Q'+(i+1), size:16, face:f, fh:i%2 ? 0.6 : 0.15, fv:1.0})), yaw:0, unit:'0.001', zup:false, opa:100, helpers:true};
 let S = {...DEF};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ar_ajustes') || '{}')); } catch(e){}
 S.edges = false;
@@ -323,21 +337,21 @@ const ptKeyNow = () => modelKey + ':' + parts.length + ':' + S.unit + ':' + S.zu
 const ptMarker = new THREE.Mesh(new THREE.SphereGeometry(.02, 14, 10), new THREE.MeshBasicMaterial({color:0x38d6c4, depthTest:false}));
 ptMarker.renderOrder = 12; ptMarker.visible = false; holder.add(ptMarker);
 let pickingPt = false;
-function applyPlacement(){
-  const yaw = S.yaw * Math.PI/180, Y = new THREE.Vector3(0,1,0), Z = new THREE.Vector3(0,0,1);
-  const q = new THREE.Quaternion(), c = new THREE.Vector3(), T = new THREE.Vector3(S.ox, S.oy, S.oz);
-  const okPt = !!S.pt && S.ptKey === ptKeyNow(), onSurf = S.origin === 'surface' || S.origin === 'face', floor = S.qrOn === 'floor' && !onSurf;
-  surf.rotation.set(floor ? Math.PI/2 : 0, 0, 0);
+// colocación del modelo respecto a un QR, según una configuración (cfg)
+function computePlacement(cfg){
+  const yaw = cfg.yaw * Math.PI/180, Y = new THREE.Vector3(0,1,0), Z = new THREE.Vector3(0,0,1);
+  const q = new THREE.Quaternion(), c = new THREE.Vector3(), T = new THREE.Vector3(cfg.ox, cfg.oy, cfg.oz);
+  const okPt = !!cfg.pt && cfg.ptKey === ptKeyNow(), onSurf = cfg.origin === 'surface' || cfg.origin === 'face', floor = cfg.qrOn === 'floor' && !onSurf;
   let usePt = null, useN = null;
-  if (S.origin === 'face') {
-    const b = modelBox, y = b.min.y + S.fv, h = S.fh;
-    if (S.face === 'front') { usePt = [b.min.x + h, y, b.max.z]; useN = [0,0,1]; }
-    else if (S.face === 'back') { usePt = [b.max.x - h, y, b.min.z]; useN = [0,0,-1]; }
-    else if (S.face === 'right') { usePt = [b.max.x, y, b.max.z - h]; useN = [1,0,0]; }
+  if (cfg.origin === 'face') {
+    const b = modelBox, y = b.min.y + cfg.fv, h = cfg.fh;
+    if (cfg.face === 'front') { usePt = [b.min.x + h, y, b.max.z]; useN = [0,0,1]; }
+    else if (cfg.face === 'back') { usePt = [b.max.x - h, y, b.min.z]; useN = [0,0,-1]; }
+    else if (cfg.face === 'right') { usePt = [b.max.x, y, b.max.z - h]; useN = [1,0,0]; }
     else { usePt = [b.min.x, y, b.min.z + h]; useN = [-1,0,0]; }
-  } else if (S.origin === 'surface' && okPt && S.nrm) { usePt = S.pt; useN = S.nrm; }
+  } else if (cfg.origin === 'surface' && okPt && cfg.nrm) { usePt = cfg.pt; useN = cfg.nrm; }
   if (usePt) {
-    // el QR está pegado sobre el equipo: la normal de la cara tocada mira hacia ti
+    // el QR está pegado sobre el equipo: la normal de esa cara mira hacia ti
     const zq = new THREE.Vector3().fromArray(useN).normalize();
     const up = Math.abs(zq.y) < 0.9 ? Y.clone() : new THREE.Vector3(0,0,-1);
     const yq = up.sub(zq.clone().multiplyScalar(up.dot(zq))).normalize(), xq = new THREE.Vector3().crossVectors(yq, zq);
@@ -346,19 +360,31 @@ function applyPlacement(){
     c.fromArray(usePt);
   } else {
     q.setFromAxisAngle(Y, yaw);
-    if (S.origin === 'base') {
+    if (cfg.origin === 'base') {
       c.set((modelBox.min.x+modelBox.max.x)/2, modelBox.min.y, (modelBox.min.z+modelBox.max.z)/2);
-      T.y = floor ? 0 : -S.qrH;
-    } else if (S.origin === 'point' && okPt) c.fromArray(S.pt);
+      T.y = floor ? 0 : -cfg.qrH;
+    } else if (cfg.origin === 'point' && okPt) c.fromArray(cfg.pt);
   }
-  const mk = usePt || (S.origin === 'point' && okPt ? S.pt : null);
-  ptMarker.visible = !!mk; if (mk) ptMarker.position.fromArray(mk);
+  const pos = T.sub(c.applyQuaternion(q));
+  const mk = usePt || (cfg.origin === 'point' && okPt ? cfg.pt : null);
+  const M = new THREE.Matrix4().makeRotationX(floor ? Math.PI/2 : 0).multiply(new THREE.Matrix4().compose(pos, q, new THREE.Vector3(1,1,1)));
+  return {q, pos, mk, floor, onSurf, M};
+}
+// con varios QR, el QR 1 de la lista es la referencia de la colocación
+const markerCfg = i => { const m = S.markers[i]; return {...S, origin:'face', face:m.face, fh:+m.fh, fv:+m.fv, ox:0, oy:0, oz:0, yaw:0, qrOn:'wall'}; };
+const refCfg = () => (S.multi && S.markers.length) ? markerCfg(0) : S;
+let refMinv = new THREE.Matrix4();
+function applyPlacement(){
+  const P = computePlacement(refCfg());
+  refMinv.copy(P.M).invert();
+  surf.rotation.set(P.floor ? Math.PI/2 : 0, 0, 0);
+  ptMarker.visible = !!P.mk; if (P.mk) ptMarker.position.fromArray(P.mk);
   surf.position.set(S.dx, S.dy, S.dz);     // desvío de comparación, en el sistema del QR
-  holder.quaternion.copy(q);
-  holder.position.copy(T).sub(c.applyQuaternion(q));
+  holder.quaternion.copy(P.q);
+  holder.position.copy(P.pos);
   const g = helpers.userData.grid, w = helpers.userData.wall;
-  g.visible = !onSurf; g.rotation.x = floor ? Math.PI/2 : 0; g.position.set(0, floor ? 0 : -S.qrH, 0);
-  w.visible = !floor && !onSurf; w.position.y = 1.3 - S.qrH;
+  g.visible = !P.onSurf; g.rotation.x = P.floor ? Math.PI/2 : 0; g.position.set(0, P.floor ? 0 : -S.qrH, 0);
+  w.visible = !P.floor && !P.onSurf; w.position.y = 1.3 - S.qrH;
   holder.updateMatrixWorld(true);
   updateMeasureVisual();
 }
@@ -580,11 +606,43 @@ function solveH(src, dst){
   const h = A.map((row, i) => row[8]/row[i]);
   return [[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]];
 }
+function solveHLS(src, dst){            // src: puntos del QR (m), dst: píxeles; n >= 4
+  const n = src.length; if (n === 4) return solveH(src, dst);
+  let mu = [0,0]; dst.forEach(p => { mu[0] += p[0]/n; mu[1] += p[1]/n; });
+  let sc = 0; dst.forEach(p => sc += Math.hypot(p[0]-mu[0], p[1]-mu[1])/n); sc = sc || 1;
+  let so = 0; src.forEach(p => so += Math.hypot(p[0], p[1])/n); so = so || 1;
+  const N = Array.from({length:8}, () => new Array(9).fill(0));
+  for (let i = 0; i < n; i++) {
+    const x = src[i][0]/so, y = src[i][1]/so, u = (dst[i][0]-mu[0])/sc, v = (dst[i][1]-mu[1])/sc;
+    for (const [row, rhs] of [[[x,y,1,0,0,0,-u*x,-u*y], u], [[0,0,0,x,y,1,-v*x,-v*y], v]])
+      for (let r = 0; r < 8; r++) { for (let c = 0; c < 8; c++) N[r][c] += row[r]*row[c]; N[r][8] += row[r]*rhs; }
+  }
+  for (let c = 0; c < 8; c++) {
+    let p = c; for (let r = c+1; r < 8; r++) if (Math.abs(N[r][c]) > Math.abs(N[p][c])) p = r;
+    if (Math.abs(N[p][c]) < 1e-12) return null; [N[c], N[p]] = [N[p], N[c]];
+    for (let r = 0; r < 8; r++) if (r !== c) { const k = N[r][c]/N[c][c]; for (let j = c; j < 9; j++) N[r][j] -= k*N[c][j]; }
+  }
+  const h = N.map((row, i) => row[8]/row[i]);
+  // deshacer la normalización: H = Timg^-1 · Hn · Tobj
+  const Hn = [[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]];
+  const Ti = [[sc,0,mu[0]],[0,sc,mu[1]],[0,0,1]], To = [[1/so,0,0],[0,1/so,0],[0,0,1]];
+  const mul = (A,B) => A.map((r,i) => [0,1,2].map(j => r[0]*B[0][j] + r[1]*B[1][j] + r[2]*B[2][j]));
+  const H = mul(mul(Ti, Hn), To); return H.map(r => r.map(v => v/H[2][2]));
+}
+// puntos de un QR: 3 esquinas fiables + centros de los 3 cuadros grandes + patrón de alineación
+function qrPoints(loc, version, size, k){
+  const N = 17 + 4*(version || 2), m = v => (v/N - 0.5)*size, o = [], px = [];
+  const add = (p, u, v) => { if (p) { o.push([m(u), -m(v)]); px.push([p.x/k, p.y/k]); } };
+  add(loc.topLeftCorner, 0, 0); add(loc.topRightCorner, N, 0); add(loc.bottomLeftCorner, 0, N);
+  add(loc.topLeftFinderPattern, 3.5, 3.5); add(loc.topRightFinderPattern, N-3.5, 3.5); add(loc.bottomLeftFinderPattern, 3.5, N-3.5);
+  if ((version || 1) >= 2) add(loc.bottomRightAlignmentPattern, N-6.5, N-6.5); else add(loc.bottomRightCorner, N, N);
+  return {o, px};
+}
 const nrm = a => Math.hypot(a[0],a[1],a[2]);
 const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
-function poseFromCorners(px, size, f, cx, cy){
-  const h = size/2, obj = [[-h,h],[h,h],[h,-h],[-h,-h]];      // y hacia arriba
-  const H = solveH(obj, px); if (!H) return null;
+function poseFromCorners(px, size, f, cx, cy, objPts){
+  const h = size/2, obj = objPts || [[-h,h],[h,h],[h,-h],[-h,-h]];      // y hacia arriba
+  const H = objPts ? solveHLS(obj, px) : solveH(obj, px); if (!H) return null;
   const m = [0,1,2].map(c => [(H[0][c] - cx*H[2][c])/f, (H[1][c] - cy*H[2][c])/f, H[2][c]]);
   let lam = 2/(nrm(m[0]) + nrm(m[1]));
   if (lam*m[2][2] < 0) lam = -lam;
@@ -604,7 +662,7 @@ function poseFromCorners(px, size, f, cx, cy){
 window.__ar = {solveH, poseFromCorners, anchor, S, holder};
 
 /* ---------- cámara, detección y giroscopio ---------- */
-let frozen = false, mode = '3d', stream = null, lastSeen = -1e9, qrSeen = false, scanTimer = 0;
+let capture = null, still = false, calibPending = false, lastMarker = -1, lastCount = 0, frozen = false, mode = '3d', stream = null, lastSeen = -1e9, qrSeen = false, scanTimer = 0;
 const tgtPos = new THREE.Vector3(), tgtQuat = new THREE.Quaternion();
 const pos0 = new THREE.Vector3(), quat0 = new THREE.Quaternion(); let qDev0 = null;
 const qDev = new THREE.Quaternion(); let haveGyro = false;
@@ -650,40 +708,124 @@ async function startCamera(){
 }
 function stopCamera(){ if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; clearInterval(scanTimer); }
 
-function scanFrame(){
-  if (mode !== 'cam' || !video.videoWidth || frozen) return;
-  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 800/Math.max(vw, vh));
-  scan.width = Math.round(vw*k); scan.height = Math.round(vh*k);
-  sctx.drawImage(video, 0, 0, scan.width, scan.height);
-  const img = sctx.getImageData(0, 0, scan.width, scan.height);
-  const r = window.jsQR && jsQR(img.data, scan.width, scan.height, {inversionAttempts:'dontInvert'});
-  const now = performance.now();
-  if (r && (!S.qrText || r.data.includes(S.qrText))) {
-    const L = r.location, px = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map(p => [p.x/k, p.y/k]);
-    const M = poseFromCorners(px, S.qrSize/100, focalPx(), vw/2, vh/2);
-    if (M) {
-      M.decompose(pos0, quat0, new THREE.Vector3());
-      qDev0 = haveGyro ? qDev.clone() : null;
-      if (!qrSeen || now - lastSeen > 2500) { anchor.position.copy(pos0); anchor.quaternion.copy(quat0); }
-      lastSeen = now; qrSeen = true; window.__ar.lastQR = r.data;
-    }
+function detectOne(img, w, h){ return window.jsQR ? jsQR(img.data, w, h, {inversionAttempts:'dontInvert'}) : null; }
+function markerOf(r){
+  if (S.multi) { const i = S.markers.findIndex(m => m.text && r.data.trim() === m.text.trim()); return i < 0 ? -2 : i; }
+  return (!S.qrText || r.data.includes(S.qrText)) ? -1 : -2;
+}
+// ajuste fino de la pose con TODOS los puntos vistos (uno o varios QR): Gauss-Newton con amortiguación
+function refinePose(A, pts, f, cx, cy){
+  const proj = (M, X) => { const e = M.elements, x = e[0]*X[0]+e[4]*X[1]+e[8]*X[2]+e[12], y = e[1]*X[0]+e[5]*X[1]+e[9]*X[2]+e[13], z = e[2]*X[0]+e[6]*X[1]+e[10]*X[2]+e[14];
+    return [cx + f*x/(-z), cy - f*y/(-z)]; };
+  const upd = (M, d) => { const R = new THREE.Matrix4(), v = new THREE.Vector3(d[0], d[1], d[2]), ang = v.length();
+    if (ang > 1e-12) R.makeRotationAxis(v.normalize(), ang);
+    R.setPosition(d[3], d[4], d[5]); return R.multiply(M); };
+  const res = M => { const r = []; pts.forEach(p => { const q = proj(M, p.X); r.push(q[0]-p.u, q[1]-p.v); }); return r; };
+  let M = A.clone(), r0 = res(M), e0 = r0.reduce((s, v) => s + v*v, 0), lam = 1e-3;
+  for (let it = 0; it < 12; it++) {
+    const J = []; for (let j = 0; j < 6; j++) { const d = [0,0,0,0,0,0]; d[j] = j < 3 ? 1e-5 : 1e-5; const rj = res(upd(M, d)); J.push(rj.map((v, i) => (v - r0[i])/1e-5)); }
+    const N = Array.from({length:6}, () => new Array(7).fill(0));
+    for (let i = 0; i < r0.length; i++) for (let a2 = 0; a2 < 6; a2++) { N[a2][6] -= J[a2][i]*r0[i]; for (let b2 = 0; b2 < 6; b2++) N[a2][b2] += J[a2][i]*J[b2][i]; }
+    for (let a2 = 0; a2 < 6; a2++) N[a2][a2] *= (1 + lam);
+    for (let c = 0; c < 6; c++) { let pv = c; for (let rr = c+1; rr < 6; rr++) if (Math.abs(N[rr][c]) > Math.abs(N[pv][c])) pv = rr; [N[c], N[pv]] = [N[pv], N[c]];
+      if (Math.abs(N[c][c]) < 1e-15) return M; for (let rr = 0; rr < 6; rr++) if (rr !== c) { const kk = N[rr][c]/N[c][c]; for (let j = c; j < 7; j++) N[rr][j] -= kk*N[c][j]; } }
+    const d = N.map((row, i) => row[6]/row[i]), M2 = upd(M, d), r2 = res(M2), e2 = r2.reduce((s, v) => s + v*v, 0);
+    if (e2 < e0) { M = M2; r0 = r2; lam = Math.max(lam/3, 1e-7); if (e0 - e2 < 1e-6*e0) { e0 = e2; break; } e0 = e2; } else lam *= 5;
   }
+  return M;
+}
+function scanFrame(){
+  if (mode !== 'cam' || !video.videoWidth || (frozen && !capture)) return;
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 960/Math.max(vw, vh));
+  const W = scan.width = Math.round(vw*k), Hh = scan.height = Math.round(vh*k);
+  sctx.drawImage(video, 0, 0, W, Hh);
+  const now = performance.now(), dets = [];
+  let r = detectOne(sctx.getImageData(0, 0, W, Hh), W, Hh);
+  for (let pass = 0; r && pass < 3; pass++) {
+    const mi = markerOf(r);
+    if (mi > -2 && !dets.some(d => d.mi === mi)) dets.push({r, mi});
+    if (pass === 2 || dets.length === 2 || (!S.multi && (mi > -2 || !S.qrText))) break;
+    // tapar el QR encontrado y buscar un segundo QR en la misma imagen
+    const L = r.location, c = [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner];
+    const mx = c.reduce((s, p) => s + p.x, 0)/4, my = c.reduce((s, p) => s + p.y, 0)/4;
+    sctx.fillStyle = '#fff'; sctx.beginPath(); c.forEach((p, i) => { const x = mx + (p.x-mx)*1.35, y = my + (p.y-my)*1.35; i ? sctx.lineTo(x, y) : sctx.moveTo(x, y); }); sctx.fill();
+    r = detectOne(sctx.getImageData(0, 0, W, Hh), W, Hh);
+  }
+  if (!dets.length) return;
+  const f = focalPx(), cx = vw/2, cy = vh/2, pts = [];
+  let best = null;
+  dets.forEach(d => {
+    const size = (d.mi >= 0 ? +S.markers[d.mi].size : S.qrSize)/100;
+    if (calibPending) finishCalib(d.r, k, size);
+    const P = qrPoints(d.r.location, d.r.version, size, k);
+    const Pm = poseFromCorners(P.px, size, f, cx, cy, P.o); if (!Pm) return;
+    // del sistema de este QR al sistema de referencia (QR 1): Xref = Href · Hi^-1 · Xi
+    const toRef = d.mi > 0 ? refMinv.clone().invert().multiply(computePlacement(markerCfg(d.mi)).M.invert()) : new THREE.Matrix4();
+    P.o.forEach((o, i) => { const X = new THREE.Vector3(o[0], o[1], 0).applyMatrix4(toRef); pts.push({X:[X.x, X.y, X.z], u:P.px[i][0], v:P.px[i][1]}); });
+    const A = d.mi > 0 ? Pm.clone().multiply(computePlacement(markerCfg(d.mi)).M).multiply(refMinv) : Pm.clone();
+    const area = Math.abs((P.px[1][0]-P.px[0][0])*(P.px[2][1]-P.px[0][1]) - (P.px[2][0]-P.px[0][0])*(P.px[1][1]-P.px[0][1]));
+    if (!best || area > best.area) best = {A, area, d, c:new THREE.Vector3().setFromMatrixPosition(Pm)};
+  });
+  if (!best) return;
+  let M = dets.length > 1 ? refinePose(best.A, pts, f, cx, cy) : best.A;
+  if (S.grav && haveGyro && dets.length === 1 && qrIsVertical()) {
+    // el sistema de referencia es vertical: su eje "arriba" debe coincidir con la gravedad que mide el celular (giro alrededor del QR visto)
+    const pq = new THREE.Quaternion(); M.decompose(new THREE.Vector3(), pq, new THREE.Vector3());
+    const ug = new THREE.Vector3(0,1,0).applyQuaternion(qDev.clone().invert()), ua = new THREE.Vector3(0,1,0).applyQuaternion(pq);
+    const Rg = new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(ua, ug));
+    const c = best.c; M = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(Rg).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)).multiply(M);
+  }
+  const pm = new THREE.Vector3(), qm = new THREE.Quaternion(); M.decompose(pm, qm, new THREE.Vector3());
+  if (capture) {
+    capture.p.push(pm.clone()); capture.q.push(qm.clone());
+    if (capture.p.length >= 8 || now > capture.until) finishCapture();
+    else toast('Capturando… mantén el celular quieto (' + capture.p.length + '/8)', 3000);
+  }
+  if (still) return;
+  if (!qrSeen || now - lastSeen > 2500) { pos0.copy(pm); quat0.copy(qm); anchor.position.copy(pm); anchor.quaternion.copy(qm); }
+  else {
+    // predicción: girar la última pose con lo que giró el celular desde entonces
+    if (haveGyro && qDev0) { const rel = qDev.clone().invert().multiply(qDev0); pos0.applyQuaternion(rel); quat0.premultiply(rel); }
+    // filtro adaptativo: el temblor se suaviza mucho; el movimiento real se sigue rápido (con dos QR se confía más)
+    const lo = dets.length > 1 ? 0.25 : 0.12;
+    const sd = clamp(pos0.distanceTo(pm)/0.04, lo, 1), sa = clamp(quat0.angleTo(qm)/(6*Math.PI/180), lo, 1);
+    pos0.lerp(pm, sd); quat0.slerp(qm, sa);
+  }
+  qDev0 = haveGyro ? qDev.clone() : null;
+  lastSeen = now; qrSeen = true; lastMarker = best.d.mi; lastCount = dets.length; window.__ar.lastQR = dets.map(d => d.r.data).join(' + ');
+}
+function finishCapture(){
+  const c = capture; capture = null; if (!c.p.length) { toast('No se vio ningún QR. Apunta a un QR e inténtalo otra vez.', 5000); return; }
+  const med = k => { const a = c.p.map(v => v[k]).sort((x, y) => x - y); return a[Math.floor(a.length/2)]; };
+  const q = c.q[c.q.length - 1].clone(), acc = [0,0,0,0];
+  c.q.forEach(v => { const sg = v.dot(q) < 0 ? -1 : 1; acc[0] += sg*v.x; acc[1] += sg*v.y; acc[2] += sg*v.z; acc[3] += sg*v.w; });
+  quat0.set(acc[0], acc[1], acc[2], acc[3]).normalize(); pos0.set(med('x'), med('y'), med('z'));
+  anchor.position.copy(pos0); anchor.quaternion.copy(quat0); anchor.visible = true;
+  still = true; frozen = true; video.pause(); qrSeen = true;
+  updateCmp(); updateHint(); toast('Vista capturada con ' + c.p.length + ' lecturas. Ahora revisa, mide o guarda la foto.', 5000);
+}
+function liveAgain(){ still = false; frozen = false; capture = null; video.play().catch(()=>{}); lastSeen = -1e9; updateCmp(); updateHint(); }
+function qrIsVertical(){
+  if (S.multi || S.origin === 'face') return true;
+  if (S.origin === 'surface') return !!S.nrm && Math.abs(S.nrm[1]) < 0.5;
+  return S.qrOn !== 'floor';
 }
 function updateHint(){
   const h = $('hint'), b = $('reticleBox');
   if (mode === 'cam') {
     const tracking = !frozen && performance.now() - lastSeen < 700;
     b.style.display = qrSeen ? 'none' : 'block';
-    if (!qrSeen) { h.style.display = 'block'; h.innerHTML = 'Apunta la cámara al <b>código QR</b> pegado en la pared.<br><span style="color:var(--dim)">Mantén el QR completo y derecho en cuadro.</span>'; }
+    if (!qrSeen) { h.style.display = 'block'; h.innerHTML = 'Apunta la cámara a un <b>código QR</b> del equipo.<br><span style="color:var(--dim)">Mantén el QR completo y derecho en cuadro.</span>'; }
     else h.style.display = 'none';
     if (!parts.length) { h.style.display = 'block'; h.innerHTML = 'Carga un modelo con <b>Cargar</b>.'; }
-    setChip(frozen ? 'warn' : tracking ? 'ok' : (qrSeen ? 'warn' : ''), frozen ? 'Congelado · usa el giroscopio' : tracking ? 'QR detectado' : (qrSeen ? (S.gyro && haveGyro ? 'QR fuera de cuadro · giroscopio' : 'QR perdido') : 'Buscando QR…'));
+    setChip(frozen ? 'warn' : tracking ? 'ok' : (qrSeen ? 'warn' : ''), still ? 'Vista capturada · quieta' : frozen ? 'Congelado · usa el giroscopio' : tracking ? (lastCount > 1 ? '2 QR detectados · fijo' : S.multi && lastMarker >= 0 ? 'QR ' + (lastMarker+1) + ' detectado' : 'QR detectado') : (qrSeen ? (S.gyro && haveGyro ? 'QR fuera de cuadro · giroscopio' : 'QR perdido') : 'Buscando QR…'));
   } else { h.style.display = 'none'; b.style.display = 'none'; }
 }
 function setChip(cls, txt){ const c = $('chip'); c.className = 'panel ' + cls; $('chipTxt').textContent = txt; }
 
 /* ---------- modos ---------- */
 async function setMode(m){
+  still = false; frozen = false; capture = null;
   if (m === mode && m !== 'xr') return;
   if (mode === 'xr' && m !== 'xr') await endXR();
   mode = m;
@@ -761,7 +903,7 @@ function frame(t, xrFrame){
   if (mode === 'cam') {
     const tracking = !frozen && performance.now() - lastSeen < 700;
     if (qrSeen) {
-      let useGyro = S.gyro && haveGyro && qDev0;
+      let useGyro = S.gyro && haveGyro && qDev0 && !still;
       if (useGyro) {            // el QR queda fijo en el mundo mientras giras el celular
         _q2.copy(qDev).invert().multiply(qDev0);          // rotación relativa (cámara ahora ← cámara entonces)
         tgtQuat.copy(_q2).multiply(quat0); tgtPos.copy(pos0).applyQuaternion(_q2);
@@ -798,6 +940,7 @@ function updateCmp(){
   $('cOut').textContent = 'Desvío del diseño → X ' + fmtD(S.dx) + ' · Y ' + fmtD(S.dy) + ' · Z ' + fmtD(S.dz) + ' mm';
   $('cEdges').classList.toggle('on', !!S.edges); $('cFreeze').classList.toggle('on', frozen);
   $('cFreeze').textContent = frozen ? 'Descongelar' : 'Congelar'; $('opa2').value = S.opa;
+  $('cCap').textContent = still ? 'Volver a en vivo' : 'Capturar vista'; $('cCap').classList.toggle('on', still);
 }
 function buildEdges(){
   let tris = 0; parts.forEach(p => { const g = p.mesh.geometry; tris += (g.index ? g.index.count : g.attributes.position.count)/3; });
@@ -814,7 +957,14 @@ $('bCmp').onclick = () => { const on = $('cmp').style.display !== 'block'; $('cm
 $('cmpClose').onclick = () => { $('cmp').style.display = 'none'; $('bCmp').classList.remove('on'); };
 $('opa2').addEventListener('input', e => { S.opa = +e.target.value; $('opa').value = S.opa; refreshMaterials(); saveS(); });
 $('cEdges').onclick = () => { S.edges = !S.edges; saveS(); if (S.edges) buildEdges(); refreshMaterials(); updateCmp(); };
-$('cFreeze').onclick = () => { if (mode !== 'cam' || !qrSeen) { toast('Primero detecta el QR con la cámara'); return; } frozen = !frozen; updateCmp(); updateHint(); toast(frozen ? 'Congelado: el diseño ya no sigue al QR; se mueve con el giroscopio' : 'Descongelado: vuelve a seguir al QR'); };
+$('cCap').onclick = () => {
+  if (mode !== 'cam') { toast('Primero abre “Cámara + QR”'); return; }
+  if (still) { liveAgain(); toast('De vuelta en vivo'); return; }
+  frozen = false; capture = {p:[], q:[], until:performance.now() + 2500};
+  setTimeout(() => { if (capture) finishCapture(); }, 3200);
+  toast('Capturando… mantén el celular quieto apuntando a un QR', 3000);
+};
+$('cFreeze').onclick = () => { if (still) { liveAgain(); return; } if (mode !== 'cam' || !qrSeen) { toast('Primero detecta el QR con la cámara'); return; } frozen = !frozen; updateCmp(); updateHint(); toast(frozen ? 'Congelado: el diseño ya no sigue al QR; se mueve con el giroscopio' : 'Descongelado: vuelve a seguir al QR'); };
 document.querySelectorAll('#cmp [data-n]').forEach(b => b.onclick = () => {
   const ax = b.dataset.n[0], sg = b.dataset.n[1] === '+' ? 1 : -1, st = (+$('cStep').value)/1000;
   S['d' + ax] = Math.round((S['d' + ax] + sg*st)*10000)/10000; saveS(); applyPlacement(); updateCmp();
@@ -832,17 +982,52 @@ $('cPhoto').onclick = () => {
     cv.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'comparacion_' + Date.now() + '.png'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); toast('Foto guardada'); }, 'image/png');
   } catch(e) { toast('No se pudo guardar la foto: ' + e.message, 5000); }
 };
+/* ---------- varios QR ---------- */
+const FACES_TXT = {front:'Frente', back:'Atrás', right:'Derecha', left:'Izquierda'};
+function renderMk(){
+  $('mkList').innerHTML = S.markers.map((m, i) => '<div class="mk" data-i="'+i+'"><b style="grid-row:span 3">QR '+(i+1)+'</b>' +
+    '<span><label>Texto del QR</label><input data-k="text" value="'+esc(m.text||'')+'"></span>' +
+    '<span><label>Cara</label><select data-k="face">'+Object.entries(FACES_TXT).map(([v,t]) => '<option value="'+v+'"'+(m.face===v?' selected':'')+'>'+t+'</option>').join('')+'</select></span>' +
+    '<span><label>Desde borde izq. (m)</label><input type="number" step="0.01" data-k="fh" value="'+m.fh+'"></span>' +
+    '<span><label>Altura al piso (m)</label><input type="number" step="0.01" data-k="fv" value="'+m.fv+'"></span>' +
+    '<span><label>Tamaño (cm)</label><input type="number" step="0.5" data-k="size" value="'+m.size+'"></span>' +
+    '<span style="align-self:end"><button class="btn" data-del="'+i+'">Quitar</button></span></div>').join('');
+}
+$('mkList').addEventListener('input', e => {
+  const row = e.target.closest('.mk'), k = e.target.dataset.k; if (!row || !k) return;
+  const m = S.markers[+row.dataset.i]; m[k] = (k === 'text' || k === 'face') ? e.target.value : (parseFloat(e.target.value) || 0);
+  saveS(); applyPlacement();
+});
+$('mkList').addEventListener('click', e => { const d = e.target.dataset.del; if (d == null) return; S.markers.splice(+d, 1); saveS(); renderMk(); applyPlacement(); });
+$('mkAdd').onclick = () => { const n = S.markers.length + 1; S.markers.push({text:'ECS700-Q'+n, size:16, face:['front','right','back','left'][(n-1)%4], fh:0.5, fv:1.0}); saveS(); renderMk(); };
+renderMk();
+
+/* ---------- calibrar la lente ---------- */
+$('calGo').onclick = () => {
+  if (mode !== 'cam') { toast('Primero abre “Cámara + QR”'); return; }
+  calibPending = true; openSheet(false); toast('Mantén el celular quieto, de frente al QR, a ' + $('calD').value + ' m…', 6000);
+};
+function finishCalib(r, k, size){
+  const L = r.location, d1 = Math.hypot(L.topRightCorner.x - L.topLeftCorner.x, L.topRightCorner.y - L.topLeftCorner.y)/k,
+        d2 = Math.hypot(L.bottomLeftCorner.x - L.topLeftCorner.x, L.bottomLeftCorner.y - L.topLeftCorner.y)/k;
+  const dist = parseFloat($('calD').value) || 0.5, f = ((d1 + d2)/2)*dist/size;
+  const vw = video.videoWidth, vh = video.videoHeight, fov = 2*Math.atan((Math.max(vw, vh)/2)/f)*180/Math.PI;
+  calibPending = false;
+  if (!(fov > 35 && fov < 110)) { toast('La calibración no salió bien (' + Math.round(fov) + '°). Revisa la distancia y el tamaño del QR.', 6000); return; }
+  S.fov = Math.round(fov*10)/10; $('fov').value = S.fov; saveS(); fitCam();
+  toast('Lente calibrada: ' + S.fov + '°', 5000);
+}
 $('bLoad').onclick = () => $('file').click();
 $('file').onchange = e => { loadFiles(e.target.files); e.target.value = ''; };
 
-const FIELDS = ['qrSize','qrText','qrH','fov','gyro','origin','qrOn','face','fh','fv','oz','ox','oy','yaw','unit','zup','opa','helpers'];
+const FIELDS = ['qrSize','qrText','qrH','fov','gyro','grav','multi','origin','qrOn','face','fh','fv','oz','ox','oy','yaw','unit','zup','opa','helpers'];
 function syncFields(){ FIELDS.forEach(k => { const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k]; }); }
 FIELDS.forEach(k => {
   const el = $(k); if (el.type === 'checkbox') el.checked = !!S[k]; else el.value = S[k];
   el.addEventListener('input', () => {
     S[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' || el.type === 'range' ? (parseFloat(el.value) || 0) : el.value);
     if (k === 'origin' && (S.origin === 'face' || S.origin === 'surface')) { S.ox = S.oy = S.oz = 0; S.yaw = 0; syncFields(); }
-    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','origin','qrOn','face','fh','fv','oz','ox','oy','yaw'].includes(k)) applyPlacement();
+    if (k === 'unit' || k === 'zup') { unitOverride = null; applyUnits(); } else if (['qrH','multi','origin','qrOn','face','fh','fv','oz','ox','oy','yaw'].includes(k)) applyPlacement();
     if (k === 'qrSize') helpers.userData.qr.scale.setScalar(S.qrSize/100);
     if (k === 'fov') fitCam();
     if (k === 'opa') refreshMaterials();
@@ -879,6 +1064,7 @@ helpers.visible = S.helpers; orbit.enabled = true; activeCam = cam3d; mode = '3d
 setChip('', 'Vista 3D');
 if (new URLSearchParams(location.search).get('modo') === 'cam') setMode('cam'); else toast('Modelo de demostración. Pulsa “Cámara + QR” o carga tu archivo.', 4500);
 window.__ar.setMode = setMode; Object.defineProperty(window.__ar, 'parts', {get: () => parts}); window.__ar.S = S; window.__ar.loadFiles = loadFiles; window.__ar.select = select;
+window.__ar.placeM = i => computePlacement(markerCfg(i)).M;
 window.__ar.getState = () => ({mode, qrSeen, lastSeen, tracking: performance.now() - lastSeen < 700});
 </script>
 </body>
