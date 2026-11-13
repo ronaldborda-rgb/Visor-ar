@@ -124,6 +124,8 @@ a{color:var(--acc)}
     <div class="f"><span>Opacidad del diseño</span><input type="range" id="opa2" min="10" max="100" step="5"></div>
     <div class="row2" style="margin:4px 0 8px">
       <button class="btn" id="cEdges">Solo contorno</button>
+      <button class="btn" id="cFoot">Huella en el piso</button>
+      <button class="btn" id="cOnlyFoot">Ocultar modelo</button>
       <button class="btn" id="cCap">Capturar vista</button>
       <button class="btn" id="cFreeze">Congelar</button>
       <button class="btn" id="cPhoto">Guardar foto</button>
@@ -293,7 +295,7 @@ function clearModel(){
     const o = pivot.children.pop();
     o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose?.(); });
   }
-  parts = []; selected = -1; clearMeasure();
+  parts = []; selected = -1; clearMeasure(); clearFoot();
 }
 
 function registerModel(root, key){
@@ -333,6 +335,7 @@ function applyUnits(){
     p.dim = [s.x, s.y, s.z]; p.vol = s.x*s.y*s.z;
   });
   applyPlacement();
+  if (footOn) buildFoot();
   helpers.userData.qr.scale.setScalar(S.qrSize/100);
 }
 
@@ -1036,10 +1039,61 @@ $('pickPt').onclick = () => { pickingPt = 'point'; toggleMeasure(false); openShe
 const fmtD = v => (v > 0 ? '+' : '') + Math.round(v*1000);
 function updateCmp(){
   $('cOut').textContent = 'Desvío del diseño → X ' + fmtD(S.dx) + ' · Y ' + fmtD(S.dy) + ' · Z ' + fmtD(S.dz) + ' mm';
+  $('cFoot').classList.toggle('on', footOn); $('cOnlyFoot').classList.toggle('on', onlyFoot); $('cOnlyFoot').textContent = onlyFoot ? 'Mostrar modelo' : 'Ocultar modelo';
+  if (footOn && footInfo) $('cOut').textContent += ' · ' + footInfo;
   $('cEdges').classList.toggle('on', !!S.edges); $('cFreeze').classList.toggle('on', frozen);
   $('cFreeze').textContent = frozen ? 'Descongelar' : 'Congelar'; $('opa2').value = S.opa;
   $('cCap').textContent = still ? 'Volver a en vivo' : 'Capturar vista'; $('cCap').classList.toggle('on', still);
 }
+/* ---------- huella en el piso: contorno de la base del equipo para marcar antes de construir ---------- */
+var footOn = false, onlyFoot = false, footGrp = null, footInfo = '';
+function hull2(pts){
+  pts = pts.slice().sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const cr = (o, a, b) => (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
+  const lo = [], up = [];
+  pts.forEach(p => { while (lo.length > 1 && cr(lo[lo.length-2], lo[lo.length-1], p) <= 0) lo.pop(); lo.push(p); });
+  for (let i = pts.length-1; i >= 0; i--) { const p = pts[i]; while (up.length > 1 && cr(up[up.length-2], up[up.length-1], p) <= 0) up.pop(); up.push(p); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+function clearFoot(){
+  if (!footGrp) return;
+  holder.remove(footGrp); footGrp.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose?.(); }); footGrp = null;
+}
+function buildFoot(){
+  clearFoot(); footInfo = '';
+  if (!footOn || !parts.length) return;
+  pivot.updateMatrixWorld(true); holder.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(holder.matrixWorld).invert(), v = new THREE.Vector3(), m4 = new THREE.Matrix4();
+  let total = 0; parts.forEach(p => total += p.mesh.geometry.attributes.position.count);
+  const stride = Math.max(1, Math.ceil(total/150000)), pts = []; let ymin = Infinity;
+  parts.forEach(p => {
+    m4.multiplyMatrices(inv, p.mesh.matrixWorld); const pos = p.mesh.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i += stride) { v.fromBufferAttribute(pos, i).applyMatrix4(m4); pts.push([v.x, v.z]); if (v.y < ymin) ymin = v.y; }
+  });
+  if (pts.length < 3) return;
+  const H = hull2(pts); if (H.length < 3) return;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; H.forEach(q => { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); z0 = Math.min(z0, q[1]); z1 = Math.max(z1, q[1]); });
+  const g = new THREE.Group(), y = ymin + 0.004, col = 0xffc107;
+  const sh = new THREE.Shape(H.map(q => new THREE.Vector2(q[0], -q[1])));            // plano XZ; z = -(y de la forma) tras girar
+  const fill = new THREE.Mesh(new THREE.ShapeGeometry(sh), new THREE.MeshBasicMaterial({color:col, transparent:true, opacity:.28, side:THREE.DoubleSide, depthTest:false}));
+  fill.rotation.x = -Math.PI/2; fill.position.y = y; fill.renderOrder = 20; g.add(fill);
+  const w = 0.035, mat = new THREE.MeshBasicMaterial({color:col, side:THREE.DoubleSide, depthTest:false});
+  H.forEach((a, i) => {
+    const b = H[(i+1) % H.length], len = Math.hypot(b[0]-a[0], b[1]-a[1]); if (len < 1e-4) return;
+    const bar = new THREE.Mesh(new THREE.PlaneGeometry(len, w), mat);
+    bar.position.set((a[0]+b[0])/2, y + 0.001, (a[1]+b[1])/2);
+    bar.quaternion.setFromEuler(new THREE.Euler(-Math.PI/2, 0, 0)).premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.atan2(-(b[1]-a[1]), b[0]-a[0])));
+    bar.renderOrder = 21; g.add(bar);
+  });
+  const cm = new THREE.MeshBasicMaterial({color:0xff5722, side:THREE.DoubleSide, depthTest:false});
+  [[x0,z0],[x1,z0],[x1,z1],[x0,z1]].forEach(c => { const q = new THREE.Mesh(new THREE.PlaneGeometry(.1,.1), cm); q.rotation.x = -Math.PI/2; q.position.set(c[0], y + .002, c[1]); q.renderOrder = 22; g.add(q); });
+  holder.add(g); footGrp = g;
+  footInfo = 'Huella: ' + Math.round((x1-x0)*1000) + ' × ' + Math.round((z1-z0)*1000) + ' mm (esquinas naranjas = marcar con cinta)';
+}
+function applyFootVis(){ pivot.visible = !(footOn && onlyFoot); }
+function setFoot(on){ footOn = on; if (!on) onlyFoot = false; buildFoot(); applyFootVis(); updateCmp(); }
+$('cFoot').onclick = () => setFoot(!footOn);
+$('cOnlyFoot').onclick = () => { if (!footOn) footOn = true; onlyFoot = !onlyFoot; buildFoot(); applyFootVis(); updateCmp(); };
 function buildEdges(){
   let tris = 0; parts.forEach(p => { const g = p.mesh.geometry; tris += (g.index ? g.index.count : g.attributes.position.count)/3; });
   if (tris > 1500000) { S.edges = false; toast('El modelo es muy pesado para el modo contorno (' + Math.round(tris/1000) + ' mil triángulos). Usa la opacidad.', 6000); updateCmp(); return; }
